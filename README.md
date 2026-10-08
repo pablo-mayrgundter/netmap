@@ -24,7 +24,7 @@ DB-IP lite    ──►│  per-AS   │   tiles.py   XYZ PNG pyramid /      │
                  └───────────┴─────────────────────────────────────┘
                                                                           │
                       web/ (Vite, deck.gl + MapLibre) ◄───────────────────┘
-                      WebGL vectors or raster tiles · OSM / CARTO / none · 2D map or 3D globe
+                      WebGL vectors or raster tiles · dark grid / OSM / none · 2D map or 3D globe
 ```
 
 ## Quick start
@@ -57,15 +57,62 @@ runs on the GPU, so the slider is instant. *Backbone only* is a separate
 view: each AS's primary provider link plus the core mesh, which is what the
 cyber layout is computed from.
 
-Keys: `1` cyber · `2` hybrid · `3` geo · `g` globe · `/` search · `Esc` deselect.
-The URL hash keeps mode, view, camera and selected AS, so links are shareable.
+**Fiber bundles.** Links whose two ends fall in the same pair of grid cells
+are merged into one fiber. This happens after PoP re-attachment and with the
+current filters and sampling applied. Each fiber runs between the centroids
+of its members' ends, its width is `log2(1 + links)`, and its brightness
+follows the light of the links it replaces. Member links are hidden. The
+*Bundle* slider sets the cell size from metro (about 5 km) to region (about
+650 km), and hovering a fiber shows its transit/peering counts. It works in
+cyber mode too, where it bundles links between nearby clusters.
 
-Full-size build on a 4-core box (84k ASes, about 350k links) takes about
-3 minutes. Most of that is LGL (about 1.5 min) and, for synthetic builds,
-generating the graph. Parsing DB-IP adds about 20 s the first time only.
-Raster tiles take about 1 s each, so a z0–4 pyramid of all three modes is a
-few minutes. `--cyber drl` and `--fr-iters` are available, but they're much
-slower at this scale.
+Keys: `1` cyber · `2` hybrid · `3` geo · `g` globe · `/` search · `Esc` deselect.
+The URL hash is a full permalink: every control (layout, view, basemap,
+renderer, sliders, toggles), the dataset, the camera (2D map or globe) and the
+selected AS. Opening a link restores the view exactly. Without a hash the
+viewer starts on the hybrid globe with backbone, points of presence and
+region-scale fiber bundles on.
+
+A full CAIDA build (81k ASes, 657k links) takes about 30 s on a 4-core
+box, and everything uses all cores by default (`NETMAP_THREADS` overrides).
+Parsing DB-IP adds about 20 s the first time only. Raster tiles render in a
+process pool with a C line splatter: a z0–5 layer takes about 16 s and z6–7
+about 90 s on 4 cores.
+
+**Native LGL** (`pipeline/netmap/native/lgl.c`) is a reimplementation of
+LGL (Adai et al. 2004) using igraph's scheme: BFS layers, placement around
+parents, grid-cutoff Fruchterman–Reingold, the same cooling. It's built for
+throughput:
+
+* nodes are relabelled in BFS order, so the placed set is an array prefix;
+* every iteration counting-sorts nodes into grid cells, so the repulsion loop
+  over neighbouring cells is contiguous, branch-free and sqrt-free, and the
+  compiler vectorizes it (AVX2, NEON, or wasm SIMD128);
+* a small pthread pool with dynamic chunks runs repulsion, attraction and the
+  grid build;
+* positions are double-buffered, so output is bit-identical for any thread
+  count.
+
+On the real backbone it takes 11 s on one thread and 4.7 s on four,
+versus igraph's 103 s. Layout quality matches igraph's on the tests.
+
+The other native kernels, all in `pipeline/netmap/native/`:
+
+* `paths.c` builds the traceroute-style link sampling: shortest-path trees
+  from 255 vantage ASes, run in parallel. It's BFS, or Dijkstra when given
+  weights, and lowers ranks with an atomic min so results are deterministic.
+  It takes 0.25 s, versus about 8 s with igraph.
+* `splat.c` is the tile rasterizer's inner loop: jittered, bilinear line
+  samples splatted into a float accumulator in one pass. The heaviest tiles
+  render about 20× faster than with numpy.
+
+It's plain C11 + pthreads with no dependencies. Python compiles it on first
+use with the system `cc` (cached in `~/.cache/netmap`, `-march=native` when
+supported) and loads it via ctypes. Without a compiler it falls back to
+igraph (`--cyber lgl-igraph` forces that). `NETMAP_THREADS` sets the thread
+count and `NETMAP_LGL_PROFILE=1` prints a timing breakdown. `make
+netmap-lgl.mjs` in that directory builds a threaded WASM+SIMD module with
+emscripten, for in-browser layout later (not yet wired up).
 
 The cyber layout runs LGL on a **backbone**: each AS's primary
 (largest-cone) provider link, plus the mesh among core ASes. Every link is
@@ -153,9 +200,9 @@ Everything is served statically from the `gh-pages` branch:
 * `preview.yml` uses
   [rossjrw/pr-preview-action](https://github.com/rossjrw/pr-preview-action)
   to publish each PR's viewer to `/pr-preview/pr-<N>/` and comment the link
-  on the PR. The preview is removed when the PR closes. Previews only rebuild
-  the viewer and read the production data at `../../data`, so they take about
-  a minute.
+  on the PR. The preview is removed when the PR closes. Each preview builds
+  its own CAIDA bundle and shallow tiles, about 2 minutes, so pipeline
+  changes show up too.
 * `ci.yml` runs the pipeline tests and the viewer build.
 
 One-time setup: **Settings → Pages → Build and deployment → Source: Deploy

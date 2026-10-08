@@ -56,7 +56,8 @@ def compute(topo: Topology, g: ig.Graph | None = None) -> Metrics:
     return Metrics(deg, providers, customers, peers, cone, coreness, rank, level)
 
 
-def sample_rank(topo: Topology, g: ig.Graph | None = None, trees: int = 255, seed: int = 7) -> np.ndarray:
+def sample_rank(topo: Topology, g: ig.Graph | None = None, trees: int = 255, seed: int = 7,
+                weights=None) -> np.ndarray:
     """Traceroute-style sampling order of links.
 
     Vantage ASes are taken in random order; from each, the BFS shortest-path
@@ -65,6 +66,9 @@ def sample_rank(topo: Topology, g: ig.Graph | None = None, trees: int = 255, see
     vantage point's spanning tree), and ``trees`` for links no tree uses.
     Showing links with rank <= k sweeps from one spanning tree (the sparse
     Opte look) to the full AS graph.
+
+    Runs natively in parallel (netmap/native/paths.c); ``weights`` (per edge,
+    non-negative) switches the trees from BFS to Dijkstra.
     """
     n, e = topo.n, topo.e
     g = g or graph_of(topo)
@@ -80,6 +84,16 @@ def sample_rank(topo: Topology, g: ig.Graph | None = None, trees: int = 255, see
     gid = int(np.argmax(np.bincount(members))) if n else 0
     cand = np.flatnonzero(members == gid)
     roots = rng.permutation(cand)[:trees]
+    try:
+        from . import native
+
+        return native.sample_rank(n, topo.src, topo.dst, roots, weights=weights)
+    except Exception as exc:  # no compiler: igraph BFS, one tree at a time
+        if weights is not None:
+            raise
+        import sys
+
+        print(f"  native sampling unavailable ({exc}); using igraph", file=sys.stderr)
     vs = np.arange(n)
     for k, r in enumerate(roots):
         _, _, parent = g.bfs(int(r))

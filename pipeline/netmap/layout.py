@@ -26,6 +26,8 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
+from . import native
+
 MAX_LAT = 85.05112878
 GOLDEN = math.pi * (3 - math.sqrt(5))
 
@@ -100,16 +102,24 @@ def cyber(g: ig.Graph, algo: str = "lgl", seed: int = 1, root: int | None = None
     sub = g.induced_subgraph(giant)
     rng = np.random.default_rng(seed)
     random.seed(seed)  # igraph draws from Python's RNG: keep layouts reproducible
+    r = int(np.argmax(sub.degree())) if root is None else root
+    pts = None
     if algo == "lgl":
-        r = int(np.argmax(sub.degree())) if root is None else root
-        lay = sub.layout_lgl(maxiter=150, root=r)
+        # Native parallel LGL (netmap/native/lgl.c); igraph's if no compiler.
+        try:
+            el = np.asarray(sub.get_edgelist(), np.int32).reshape(-1, 2)
+            pts = native.lgl(sub.vcount(), el[:, 0], el[:, 1], root=r, seed=seed)
+        except native.NativeUnavailable as exc:
+            print(f"  native LGL unavailable ({exc}); using igraph", file=sys.stderr)
+            algo = "lgl-igraph"
+    if algo == "lgl-igraph":
+        pts = np.asarray(sub.layout_lgl(maxiter=150, root=r).coords, np.float64)
     elif algo == "drl":
-        lay = sub.layout_drl()
+        pts = np.asarray(sub.layout_drl().coords, np.float64)
     elif algo == "fr":
-        lay = sub.layout_fruchterman_reingold(niter=500, grid=True)
-    else:
+        pts = np.asarray(sub.layout_fruchterman_reingold(niter=500, grid=True).coords, np.float64)
+    elif pts is None:
         raise ValueError(algo)
-    pts = np.asarray(lay.coords, np.float64)
     pts -= np.median(pts, axis=0)
     rad = np.quantile(np.hypot(pts[:, 0], pts[:, 1]), 0.995) or 1.0
     pts /= rad

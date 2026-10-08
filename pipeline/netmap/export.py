@@ -24,7 +24,7 @@ FORMAT_VERSION = 1
 
 def write_bundle(out: Path, *, name: str, topo, metrics, prof_rows, layouts, region_idx,
                  has_geo, pinned, names, info_records, attribution: list[str],
-                 backbone=None, sample_rank=None):
+                 backbone=None, sample_rank=None, pops=None):
     out.mkdir(parents=True, exist_ok=True)
     n, e = topo.n, topo.e
     flags = has_geo.astype(np.uint8) | (pinned.astype(np.uint8) << 1)
@@ -47,6 +47,15 @@ def write_bundle(out: Path, *, name: str, topo, metrics, prof_rows, layouts, reg
         ("edge_rank", (np.zeros(e) if sample_rank is None else sample_rank).astype(np.uint8), [e]),
         ("edge_backbone", (np.ones(e, bool) if backbone is None else backbone).astype(np.uint8), [e]),
     ]
+    if pops is not None:
+        pp, plon, plat = pops
+        sections += [
+            ("pop_pos", lonlat((plon, plat)), [pp.count, 2]),
+            ("pop_node", pp.node.astype(np.uint32), [pp.count]),
+            ("pop_offset", pp.offset.astype(np.uint32), [n + 1]),
+            ("edge_pop", pp.edge_pop.astype(np.int32).ravel(), [e, 2]),
+            ("pop_routes", pp.routes.astype(np.uint32).ravel(), [len(pp.routes), 2]),
+        ]
     table = {}
     off = 0
     with open(out / "graph.bin", "wb") as f:
@@ -72,6 +81,8 @@ def write_bundle(out: Path, *, name: str, topo, metrics, prof_rows, layouts, reg
             "p2c": int((topo.rel == -1).sum()), "p2p": int((topo.rel == 0).sum()),
             "geolocated": int(has_geo.sum()), "pinned": int(pinned.sum()),
             "backbone": int(e if backbone is None else np.asarray(backbone).sum()),
+            "pops": 0 if pops is None else pops[0].count,
+            "routes": 0 if pops is None else len(pops[0].routes),
         },
         "modes": ["cyber", "geo", "hybrid"],
         "regions": [{"id": r, "name": REGION_NAMES[r], "rgb": PALETTE[r]} for r in REGIONS],

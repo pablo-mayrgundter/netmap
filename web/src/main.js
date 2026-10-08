@@ -3,7 +3,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { Deck, _GlobeView as GlobeView } from '@deck.gl/core';
 import { MapboxOverlay } from '@deck.gl/mapbox';
 import { DataFilterExtension } from '@deck.gl/extensions';
-import { ArcLayer, LineLayer, ScatterplotLayer, GeoJsonLayer, SolidPolygonLayer } from '@deck.gl/layers';
+import { LineLayer, PathLayer, ScatterplotLayer, GeoJsonLayer, SolidPolygonLayer } from '@deck.gl/layers';
 import { feature } from 'topojson-client';
 import countries110 from 'world-atlas/countries-110m.json';
 
@@ -16,35 +16,78 @@ const params = new URLSearchParams(location.search);
 const TILE_SERVER = params.get('tiles');
 
 const BASEMAPS = {
-  dark: {
-    tiles: ['a', 'b', 'c', 'd'].map((s) => `https://${s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png`),
-    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions">CARTO</a>',
-  },
   osm: {
     tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
     attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
   },
 };
 
-const ALT_MAX_M = 2_500_000;
+// The default basemap: a dark lat/lon graticule generated here, so there are
+// no tile requests, tokens or placeholder images. Every 10 degrees, brighter
+// every 30.
+const GRID_BG = '#04060b';
+const graticule = (() => {
+  const features = [];
+  const line = (coords, major) => features.push({ type: 'Feature', properties: { major }, geometry: { type: 'LineString', coordinates: coords } });
+  for (let lon = -180; lon <= 180; lon += 10) {
+    const pts = [];
+    for (let lat = -80; lat <= 80; lat += 2) pts.push([lon, lat]);
+    line(pts, lon % 30 === 0);
+  }
+  for (let lat = -80; lat <= 80; lat += 10) {
+    const pts = [];
+    for (let lon = -180; lon <= 180; lon += 2) pts.push([lon, lat]);
+    line(pts, lat % 30 === 0);
+  }
+  return { type: 'FeatureCollection', features };
+})();
+
+
+// Core networks hover this high (at full hierarchy level, default slider) on
+// the globe: high enough to read as a layer above the cities, low enough that
+// zooming in doesn't put them in the camera's face.
+const ALT_MAX_M = 700_000;
 
 // --- state ---------------------------------------------------------------
 
 const hash = new URLSearchParams(location.hash.slice(1));
+
+// Every UI parameter: state field, URL key, type, default. Permalinks carry
+// all of them (plus dataset, camera and selection), so a link reproduces the
+// view exactly even if these defaults change later.
+const PARAMS = [
+  ['mode', 'mode', ['cyber', 'hybrid', 'geo'], 'hybrid'],
+  ['view', 'view', ['map', 'globe'], 'globe'],
+  ['basemap', 'basemap', ['grid', 'osm', 'none'], 'grid'],
+  ['renderer', 'renderer', ['vector', 'raster'], 'vector'],
+  ['edgeAlpha', 'edges', 'num', 0.05],
+  ['nodeSize', 'nodes', 'num', 0],
+  ['sampling', 'sample', 'num', 0], // 0 = one vantage tree .. 1 = every link
+  ['altitude', 'alt', 'num', 0.2],
+  ['showTransit', 'transit', 'bool', true],
+  ['showPeering', 'peering', 'bool', true],
+  ['backboneOnly', 'backbone', 'bool', true],
+  ['pops', 'pops', 'bool', true], // floating ASes drawn at their points of presence
+  ['fibers', 'fibers', 'bool', true], // bundle links that join the same pair of places
+  ['fiberCell', 'cell', 'num', 1], // 0..1 -> ~5..650 km
+  ['fiberWidth', 'fw', 'num', 0.1],
+  ['glow', 'glow', 'bool', true],
+];
+
+function readParam([, key, type, def]) {
+  const v = hash.get(key);
+  if (v === null) return def;
+  if (type === 'bool') return v === '1' || v === 'true';
+  if (type === 'num') {
+    const x = Number(v);
+    return Number.isFinite(x) ? Math.min(1, Math.max(0, x)) : def;
+  }
+  return type.includes(v) ? v : def; // enumerated string
+}
+
 const state = {
   dataset: hash.get('data') || params.get('data') || null,
-  mode: hash.get('mode') || 'hybrid',
-  view: hash.get('view') || 'map',
-  basemap: hash.get('basemap') || 'dark',
-  renderer: 'vector',
-  edgeAlpha: 0.35,
-  nodeSize: 0.4,
-  altitude: 0.5,
-  showTransit: true,
-  showPeering: true,
-  backboneOnly: hash.get('backbone') === '1',
-  sampling: hash.has('sample') ? Number(hash.get('sample')) : 1, // 0..1 slider position
-  glow: true,
+  ...Object.fromEntries(PARAMS.map((p) => [p[0], readParam(p)])),
   selected: null, // node index
   hover: null,
 };
@@ -74,18 +117,21 @@ const overlay = new MapboxOverlay({ interleaved: false, layers: [], getTooltip: 
 map.addControl(overlay);
 
 let globe = null;
+let globeCam = null; // globe's current view state, for permalinks
 function ensureGlobe() {
   if (globe) return globe;
   const c = map.getCenter();
   globe = new Deck({
     parent: $('globe'),
     views: new GlobeView({ resolution: 5 }),
-    initialViewState: { longitude: c.lng, latitude: c.lat, zoom: Math.max(map.getZoom() - 0.6, 0) },
+    initialViewState: (globeCam = { longitude: c.lng, latitude: c.lat, zoom: (globeZoom = Math.max(map.getZoom() - 0.6, 0)) }),
     controller: true,
     layers: [],
     onHover: onHover,
     onClick: onClick,
     onViewStateChange: ({ viewState }) => {
+      globeCam = viewState;
+      writeHashSoon();
       if (Math.abs(viewState.zoom - globeZoom) > 0.05) {
         globeZoom = viewState.zoom;
         renderSoon();
@@ -97,11 +143,19 @@ function ensureGlobe() {
 }
 
 function baseStyle() {
+  const grid = state.basemap === 'grid';
   const style = {
     version: 8,
     sources: {},
-    layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#000' } }],
+    layers: [{ id: 'bg', type: 'background', paint: { 'background-color': grid ? GRID_BG : '#000' } }],
   };
+  if (grid) {
+    style.sources.grid = { type: 'geojson', data: graticule };
+    style.layers.push(
+      { id: 'grid-minor', type: 'line', source: 'grid', filter: ['!', ['get', 'major']], paint: { 'line-color': '#111827', 'line-width': 0.6 } },
+      { id: 'grid-major', type: 'line', source: 'grid', filter: ['get', 'major'], paint: { 'line-color': '#1b2538', 'line-width': 0.9 } },
+    );
+  }
   const b = BASEMAPS[state.basemap];
   if (b) {
     style.sources.base = { type: 'raster', tiles: b.tiles, tileSize: 256, attribution: b.attribution, maxzoom: 19 };
@@ -138,11 +192,14 @@ function updateRaster() {
   if (map.getSource('net')) map.removeSource('net');
   if (state.renderer !== 'raster' || !G) return;
   const base = TILE_SERVER || `${G.root}/tiles`;
-  const layer = state.backboneOnly ? `backbone/${state.mode}` : state.mode;
-  const tm = tilesMeta[layer] || tilesMeta[state.mode] || {};
+  // Backbone-only tiles are optional (`netmap tiles --backbone`); fall back to
+  // the full-link pyramid rather than requesting tiles that don't exist.
+  const bb = `backbone/${state.mode}`;
+  const layer = state.backboneOnly && !TILE_SERVER && tilesMeta[bb] ? bb : state.mode;
+  const tm = tilesMeta[layer] || {};
   map.addSource('net', {
     type: 'raster',
-    tiles: [`${base}/${layer}/{z}/{x}/{y}.png`],
+    tiles: [`${base}/${layer}/{z}/{x}/{y}.${tm.format || 'png'}`],
     tileSize: 256,
     minzoom: 0,
     maxzoom: TILE_SERVER ? 14 : tm.maxzoom ?? 5,
@@ -175,22 +232,39 @@ function buildColours() {
 // saturate an 8-bit framebuffer and metro-scale structure stays visible.
 const lengthFactor = {};
 function edgeLengthFactor(mode) {
-  if (lengthFactor[mode]) return lengthFactor[mode];
-  const p = G[`pos_${mode}`];
+  const key = `${mode}|${usePops()}`;
+  if (lengthFactor[key]) return lengthFactor[key];
   const merc = (lon, lat) => {
     const s = Math.sin((Math.max(-85, Math.min(85, lat)) * Math.PI) / 180);
     return [(lon + 180) / 360, 0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)];
   };
   const f = new Float32Array(G.e);
+  const ta = [0, 0, 0];
+  const tb = [0, 0, 0];
   for (let k = 0; k < G.e; k++) {
-    const a = G.edges[2 * k];
-    const b = G.edges[2 * k + 1];
-    const [x0, y0] = merc(p[2 * a], p[2 * a + 1]);
-    const [x1, y1] = merc(p[2 * b], p[2 * b + 1]);
+    endPos(k, 0, ta, mode);
+    endPos(k, 1, tb, mode);
+    const [x0, y0] = merc(ta[0], ta[1]);
+    const [x1, y1] = merc(tb[0], tb[1]);
     const len = Math.hypot(x1 - x0, y1 - y0);
     f[k] = Math.min(1, Math.pow(0.004 / Math.max(len, 1e-7), 0.6));
   }
-  return (lengthFactor[mode] = f);
+  return (lengthFactor[key] = f);
+}
+
+let routeLF = null;
+function routeLengthFactor() {
+  if (routeLF) return routeLF;
+  const r = G.pop_routes;
+  const f = new Float32Array(r.length / 2);
+  for (let k = 0; k < f.length; k++) {
+    const a = r[2 * k];
+    const b = r[2 * k + 1];
+    const dLon = Math.abs(G.pop_pos[2 * a] - G.pop_pos[2 * b]);
+    const len = Math.hypot(Math.min(dLon, 360 - dLon), G.pop_pos[2 * a + 1] - G.pop_pos[2 * b + 1]) / 360;
+    f[k] = Math.min(1, Math.pow(0.012 / Math.max(len, 1e-7), 0.6));
+  }
+  return (routeLF = f);
 }
 
 // --- positions -----------------------------------------------------------
@@ -201,15 +275,252 @@ const visibleNode = (i) => state.mode !== 'geo' || hasGeo(i);
 function altitude(i) {
   if (state.view !== 'globe') return 0;
   const l = G.level[i];
-  return Math.pow(l, 1.8) * ALT_MAX_M * state.altitude * 2;
+  return Math.pow(l, 1.5) * ALT_MAX_M * state.altitude * 2;
 }
 
-function pos(i, target) {
-  const p = G[`pos_${state.mode}`];
+function pos(i, target, mode = state.mode) {
+  const p = G[`pos_${mode}`];
   target[0] = p[2 * i];
   target[1] = p[2 * i + 1];
   target[2] = altitude(i);
   return target;
+}
+
+// Points of presence (pipeline/netmap/pops.py): floating ASes split into the
+// cities their address space lives in. Each link end may attach to a PoP
+// instead of the AS's single position, and each PoP'd AS has core routes
+// (a spanning tree) between its PoPs.
+const usePops = (mode = state.mode) => state.pops && mode !== 'cyber' && !!G?.pop_pos;
+const hasPops = (i) => !!G.pop_offset && G.pop_offset[i + 1] > G.pop_offset[i];
+
+function popPos(p, target) {
+  target[0] = G.pop_pos[2 * p];
+  target[1] = G.pop_pos[2 * p + 1];
+  target[2] = altitude(G.pop_node[p]);
+  return target;
+}
+
+function endPos(k, side, target, mode = state.mode) {
+  if (usePops(mode)) {
+    const p = G.edge_pop[2 * k + side];
+    if (p >= 0) return popPos(p, target);
+  }
+  return pos(G.edges[2 * k + side], target, mode);
+}
+
+// --- globe arcs ----------------------------------------------------------
+// Links on the globe are paths we build here: great-circle interpolation
+// between the two ends' altitudes plus a gentle sin-shaped lift. (deck's
+// ArcLayer in GlobeView lofts arcs thousands of km up, so from above they
+// read as radial dashes.) Short links get 1-2 segments, long ones up to 16.
+const D2R = Math.PI / 180;
+function buildArcs(count, ends, liftK) {
+  const a = [0, 0, 0];
+  const b = [0, 0, 0];
+  const segs = new Uint8Array(count);
+  let total = 0;
+  for (let k = 0; k < count; k++) {
+    ends(k, a, b);
+    const dLat = (b[1] - a[1]) * D2R;
+    const dLon = (b[0] - a[0]) * D2R;
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(a[1] * D2R) * Math.cos(b[1] * D2R) * Math.sin(dLon / 2) ** 2;
+    const ang = 2 * Math.asin(Math.min(1, Math.sqrt(h)));
+    segs[k] = Math.max(1, Math.min(16, Math.ceil(ang / (4 * D2R))));
+    total += segs[k] + 1;
+  }
+  const path = new Float32Array(total * 3);
+  const startIndices = new Uint32Array(count);
+  let v = 0;
+  for (let k = 0; k < count; k++) {
+    ends(k, a, b);
+    startIndices[k] = v;
+    const n = segs[k];
+    const la0 = a[1] * D2R, lo0 = a[0] * D2R, la1 = b[1] * D2R, lo1 = b[0] * D2R;
+    const x0 = Math.cos(la0) * Math.cos(lo0), y0 = Math.cos(la0) * Math.sin(lo0), z0 = Math.sin(la0);
+    const x1 = Math.cos(la1) * Math.cos(lo1), y1 = Math.cos(la1) * Math.sin(lo1), z1 = Math.sin(la1);
+    const ang = Math.acos(Math.max(-1, Math.min(1, x0 * x1 + y0 * y1 + z0 * z1)));
+    const lift = Math.min(ang * 6.371e6 * liftK, 250e3);
+    const so = Math.sin(ang);
+    let prevLon = a[0];
+    for (let i = 0; i <= n; i++) {
+      const t = i / n;
+      let x, y, z;
+      if (so < 1e-6) {
+        x = x0 + (x1 - x0) * t; y = y0 + (y1 - y0) * t; z = z0 + (z1 - z0) * t;
+      } else {
+        const w0 = Math.sin((1 - t) * ang) / so;
+        const w1 = Math.sin(t * ang) / so;
+        x = w0 * x0 + w1 * x1; y = w0 * y0 + w1 * y1; z = w0 * z0 + w1 * z1;
+      }
+      let lon = Math.atan2(y, x) / D2R;
+      // Keep longitudes continuous across the antimeridian.
+      while (lon - prevLon > 180) lon -= 360;
+      while (lon - prevLon < -180) lon += 360;
+      prevLon = lon;
+      path[3 * v] = lon;
+      path[3 * v + 1] = Math.atan2(z, Math.hypot(x, y)) / D2R;
+      path[3 * v + 2] = a[2] + (b[2] - a[2]) * t + lift * Math.sin(Math.PI * t);
+      v++;
+    }
+  }
+  return { length: count, startIndices, attributes: { getPath: { value: path, size: 3 } } };
+}
+
+const arcCache = new Map();
+function cachedArcs(key, count, ends, liftK) {
+  if (!arcCache.has(key)) {
+    if (arcCache.size > 6) arcCache.clear();
+    arcCache.set(key, buildArcs(count, ends, liftK));
+  }
+  return arcCache.get(key);
+}
+
+// --- fiber bundles -------------------------------------------------------
+// Links whose two ends fall in the same pair of grid cells (after PoP
+// re-attachment and the current filters) are merged into one fiber between
+// the centroids of their ends, drawn with width ~ log2(1 + count). Members
+// are hidden under their fiber. The cell size is a slider: metro-to-metro at
+// small sizes, region-to-region at large ones. Works in cyber mode too, where
+// it bundles links between nearby clusters of the layout.
+const FIBER_MIN = 2; // links needed to form a fiber
+function fiberCellSize() {
+  return 1.25e-4 * Math.pow(128, state.fiberCell); // mercator units (1 = world)
+}
+
+let fiberCache = { key: null, value: null };
+function computeFibers() {
+  const K = sampleK();
+  const key = `${state.mode}|${usePops()}|${state.fiberCell}|${K}|${state.showTransit}|${state.showPeering}|${state.backboneOnly}|${state.view}|${state.altitude}`;
+  if (fiberCache.key === key) return fiberCache.value;
+  const cell = fiberCellSize();
+  const inv = 1 / cell;
+  const W = Math.ceil(inv) + 2; // cells per row; ids < 2^26 for cell >= 1.25e-4
+  const merc = (lon, lat) => {
+    const s = Math.sin((Math.max(-85, Math.min(85, lat)) * Math.PI) / 180);
+    return [(lon + 180) / 360, 0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)];
+  };
+  const a = [0, 0, 0];
+  const b = [0, 0, 0];
+  const lf = edgeLengthFactor(state.mode);
+  const index = new Map();
+  const edgeBundle = new Int32Array(G.e).fill(-1);
+  // per-bundle accumulators (grown as needed)
+  let cap = 1 << 16;
+  const NF = 13;
+  let acc = new Float64Array(cap * NF); // ax ay az bx by bz r g b count transit peering inkSum
+  let nb = 0;
+  for (let k = 0; k < G.e; k++) {
+    if (G.edge_rank && G.edge_rank[k] > K) continue;
+    if (!edgeVisible(k)) continue;
+    endPos(k, 0, a);
+    endPos(k, 1, b);
+    const [xa, ya] = merc(a[0], a[1]);
+    const [xb, yb] = merc(b[0], b[1]);
+    const ca = Math.floor(ya * inv) * W + Math.floor(xa * inv);
+    const cb = Math.floor(yb * inv) * W + Math.floor(xb * inv);
+    if (ca === cb) continue; // local: stays a plain link
+    const swap = ca > cb;
+    const pk = (swap ? cb : ca) * 67108864 + (swap ? ca : cb);
+    let bi = index.get(pk);
+    if (bi === undefined) {
+      bi = nb++;
+      index.set(pk, bi);
+      if (nb > cap) {
+        const grown = new Float64Array(cap * 2 * NF);
+        grown.set(acc);
+        acc = grown;
+        cap *= 2;
+      }
+    }
+    const o = bi * NF;
+    const [sx, sy, sz, tx, ty, tz] = swap ? [xb, yb, b[2], xa, ya, a[2]] : [xa, ya, a[2], xb, yb, b[2]];
+    acc[o] += sx, acc[o + 1] += sy, acc[o + 2] += sz;
+    acc[o + 3] += tx, acc[o + 4] += ty, acc[o + 5] += tz;
+    acc[o + 6] += edgeColor[k * 4], acc[o + 7] += edgeColor[k * 4 + 1], acc[o + 8] += edgeColor[k * 4 + 2];
+    acc[o + 9] += 1;
+    acc[o + (G.edge_rel[k] === -1 ? 10 : 11)] += 1;
+    acc[o + 12] += (edgeColor[k * 4 + 3] / 255) * lf[k]; // the link's own brightness
+    edgeBundle[k] = bi;
+  }
+  // keep bundles with enough members, biggest last (drawn on top)
+  const keep = [];
+  for (let i = 0; i < nb; i++) if (acc[i * NF + 9] >= FIBER_MIN) keep.push(i);
+  keep.sort((x, y) => acc[x * NF + 9] - acc[y * NF + 9]);
+  const remap = new Int32Array(nb).fill(-1);
+  keep.forEach((bi, j) => (remap[bi] = j));
+  const toLonLat = (x, y) => [x * 360 - 180, (Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180) / Math.PI];
+  const fibers = keep.map((bi) => {
+    const o = bi * NF;
+    const c = acc[o + 9];
+    const [slon, slat] = toLonLat(acc[o] / c, acc[o + 1] / c);
+    const [tlon, tlat] = toLonLat(acc[o + 3] / c, acc[o + 4] / c);
+    return {
+      source: [slon, slat, acc[o + 2] / c],
+      target: [tlon, tlat, acc[o + 5] / c],
+      color: [acc[o + 6] / c, acc[o + 7] / c, acc[o + 8] / c],
+      count: c,
+      transit: acc[o + 10],
+      peering: acc[o + 11],
+      ink: acc[o + 12], // sum of member brightness, conserved by the fiber
+    };
+  });
+  const hidden = new Uint8Array(G.e);
+  let bundled = 0;
+  for (let k = 0; k < G.e; k++) {
+    if (edgeBundle[k] >= 0 && remap[edgeBundle[k]] >= 0) {
+      hidden[k] = 1;
+      bundled++;
+    }
+  }
+  fiberCache = { key, value: { fibers, hidden, bundled } };
+  return fiberCache.value;
+}
+
+function fiberLayers(globeView, opacity) {
+  const { fibers } = computeFibers();
+  if (!fibers.length) return [];
+  const w = (f) => 1 + Math.log2(1 + f.count) * (0.4 + 2.4 * state.fiberWidth);
+  // Ink: brightness x width follows what the hidden member links added (x2,
+  // so fibers stand out over the unbundled links), with the same
+  // zoom-dependent opacity as links.
+  const alpha = (f, k) => Math.max(8, Math.min(255, (255 * k * f.ink) / w(f)));
+  const col = (k) => (f) => [f.color[0], f.color[1], f.color[2], alpha(f, k)];
+  const fOpacity = Math.min(1, opacity * 1.5);
+  const make = (id, width, k, pickable) => {
+    if (globeView) {
+      const data = buildArcs(fibers.length, (i, a, b) => {
+        a[0] = fibers[i].source[0], a[1] = fibers[i].source[1], a[2] = fibers[i].source[2];
+        b[0] = fibers[i].target[0], b[1] = fibers[i].target[1], b[2] = fibers[i].target[2];
+      }, 0.04);
+      return new PathLayer({
+        id,
+        data,
+        _pathType: 'open',
+        getColor: (_, { index }) => col(k)(fibers[index]),
+        getWidth: (_, { index }) => width(fibers[index]),
+        widthUnits: 'pixels',
+        billboard: true,
+        opacity: fOpacity,
+        pickable,
+        parameters: blendParams(true),
+      });
+    }
+    return new LineLayer({
+      id,
+      data: fibers,
+      getSourcePosition: (f) => f.source,
+      getTargetPosition: (f) => f.target,
+      getColor: col(k),
+      getWidth: width,
+      widthUnits: 'pixels',
+      opacity: fOpacity,
+      pickable,
+      parameters: blendParams(false),
+      updateTriggers: { getColor: fiberCache.key, getWidth: `${fiberCache.key}|${state.fiberWidth}` },
+    });
+  };
+  // a faint halo under a core that carries most of the ink
+  return [make('fibers-glow', (f) => w(f) * 2.5, 0.2, false), make('fibers', w, 2.0, true)];
 }
 
 // --- layers --------------------------------------------------------------
@@ -286,48 +597,49 @@ function edgeVisible(k) {
 
 const TRANSITION = { duration: 1400, easing: (t) => t * t * (3 - 2 * t) };
 
+const showVectorsFor = (globeView) => state.renderer === 'vector' || globeView;
+
 function networkLayers(globeView) {
   if (!G) return [];
-  const trig = `${state.mode}|${state.view}|${state.altitude}`;
-  const colourTrig = `${state.mode}|${state.showTransit}|${state.showPeering}|${state.backboneOnly}`;
+  const trig = `${state.mode}|${state.view}|${state.altitude}|${usePops()}`;
   const opacity = edgeOpacity(globeView);
   const lf = edgeLengthFactor(state.mode);
+  const fib = state.fibers && showVectorsFor(globeView) ? computeFibers() : null;
+  const hidden = fib ? fib.hidden : null;
+  const colourTrig = `${state.mode}|${state.showTransit}|${state.showPeering}|${state.backboneOnly}|${usePops()}|${state.fibers ? fiberCache.key ?? 'f' : ''}`;
   const getEdgeColor = (_, { index, target }) => {
     const o = index * 4;
     target[0] = edgeColor[o];
     target[1] = edgeColor[o + 1];
     target[2] = edgeColor[o + 2];
-    target[3] = edgeVisible(index) ? edgeColor[o + 3] * lf[index] : 0;
+    // with fibers on, links left out of any fiber recede so the bundles read
+    target[3] = edgeVisible(index) && !(hidden && hidden[index]) ? edgeColor[o + 3] * lf[index] * (hidden ? 0.5 : 1) : 0;
     return target;
   };
   const edgeData = { length: G.e };
-  const src = (_, { index, target }) => pos(G.edges[2 * index], target);
-  const dst = (_, { index, target }) => pos(G.edges[2 * index + 1], target);
+  const src = (_, { index, target }) => endPos(index, 0, target);
+  const dst = (_, { index, target }) => endPos(index, 1, target);
   const layers = [];
   const showVectors = state.renderer === 'vector' || globeView;
 
   if (showVectors) {
     if (globeView) {
+      const data = cachedArcs(`edges|${trig}`, G.e, (k, a, b) => (endPos(k, 0, a), endPos(k, 1, b)), 0.03);
       layers.push(
-        new ArcLayer({
+        new PathLayer({
           id: 'edges',
-          data: edgeData,
-          getSourcePosition: src,
-          getTargetPosition: dst,
-          getSourceColor: getEdgeColor,
-          getTargetColor: getEdgeColor,
-          getHeight: (_, { index }) => 0.08 + 0.35 * Math.max(G.level[G.edges[2 * index]], G.level[G.edges[2 * index + 1]]) * state.altitude,
-          greatCircle: true,
-          numSegments: 20,
+          data,
+          _pathType: 'open',
+          getColor: getEdgeColor,
           opacity,
           extensions: G.edge_rank ? [new DataFilterExtension({ filterSize: 1 })] : [],
           getFilterValue: (_, { index }) => (G.edge_rank ? G.edge_rank[index] : 0),
           filterRange: [0, sampleK()],
           getWidth: 1,
           widthUnits: 'pixels',
+          billboard: true,
           parameters: blendParams(true),
-          updateTriggers: { getSourcePosition: trig, getTargetPosition: trig, getSourceColor: colourTrig, getTargetColor: colourTrig, getHeight: trig },
-          transitions: { getSourcePosition: TRANSITION, getTargetPosition: TRANSITION },
+          updateTriggers: { getColor: colourTrig },
         }),
       );
     } else {
@@ -352,29 +664,93 @@ function networkLayers(globeView) {
     }
   }
 
+  if (usePops() && showVectors && G.pop_routes) {
+    const routeData = { length: G.pop_routes.length / 2 };
+    const rsrc = (_, { index, target }) => popPos(G.pop_routes[2 * index], target);
+    const rdst = (_, { index, target }) => popPos(G.pop_routes[2 * index + 1], target);
+    const rlf = routeLengthFactor();
+    const rcol = (_, { index, target }) => {
+      const o = G.pop_node[G.pop_routes[2 * index]] * 4;
+      target[0] = nodeColor[o];
+      target[1] = nodeColor[o + 1];
+      target[2] = nodeColor[o + 2];
+      target[3] = 255 * rlf[index];
+      return target;
+    };
+    // Core routes are few (25k) next to the links, so they can be brighter.
+    const routeOpacity = Math.min(0.8, opacity * 2.5);
+    const common = {
+      id: 'routes',
+      data: routeData,
+      getSourcePosition: rsrc,
+      getTargetPosition: rdst,
+      opacity: routeOpacity,
+      getWidth: 1.2,
+      widthUnits: 'pixels',
+      parameters: blendParams(globeView),
+      updateTriggers: { getSourcePosition: trig, getTargetPosition: trig },
+    };
+    if (globeView) {
+      const r = G.pop_routes;
+      const data = cachedArcs(`routes|${trig}`, routeData.length, (k, a, b) => (popPos(r[2 * k], a), popPos(r[2 * k + 1], b)), 0.03);
+      layers.push(
+        new PathLayer({
+          id: 'routes',
+          data,
+          _pathType: 'open',
+          getColor: rcol,
+          opacity: routeOpacity,
+          updateTriggers: { getColor: G.id },
+          getWidth: 1.2,
+          widthUnits: 'pixels',
+          billboard: true,
+          parameters: blendParams(true),
+        }),
+      );
+    } else {
+      layers.push(new LineLayer({ ...common, getColor: rcol }));
+    }
+  }
+
+  if (fib) layers.push(...fiberLayers(globeView, opacity));
+
   // Selection: the selected AS's links, bright.
   if (state.selected !== null) {
     const nb = G.neighbours(state.selected);
-    const LinkLayer = globeView ? ArcLayer : LineLayer;
-    layers.push(
-      new LinkLayer({
-        id: 'sel-edges',
-        data: nb,
-        getSourcePosition: (d, { target }) => pos(state.selected, target),
-        getTargetPosition: (d, { target }) => pos(d.node, target),
-        getColor: (d) => (G.edge_rel[d.edge] === -1 ? [255, 255, 255, 200] : [140, 220, 255, 150]),
-        getSourceColor: [255, 255, 255, 220],
-        getTargetColor: (d) => (G.edge_rel[d.edge] === -1 ? [255, 255, 255, 160] : [140, 220, 255, 120]),
-        getHeight: 0.25,
-        greatCircle: true,
-        getWidth: 1.5,
-        widthUnits: 'pixels',
-        parameters: blendParams(globeView),
-        updateTriggers: { getSourcePosition: trig, getTargetPosition: trig },
-      }),
-    );
+    const sideOf = (d) => (G.edges[2 * d.edge] === state.selected ? 0 : 1);
+    const selColor = (d) => (G.edge_rel[d.edge] === -1 ? [255, 255, 255, 200] : [140, 220, 255, 150]);
+    if (globeView) {
+      const data = buildArcs(nb.length, (k, a, b) => (endPos(nb[k].edge, sideOf(nb[k]), a), endPos(nb[k].edge, 1 - sideOf(nb[k]), b)), 0.05);
+      layers.push(
+        new PathLayer({
+          id: 'sel-edges',
+          data,
+          _pathType: 'open',
+          getColor: (_, { index }) => selColor(nb[index]),
+          getWidth: 1.5,
+          widthUnits: 'pixels',
+          billboard: true,
+          parameters: blendParams(true),
+        }),
+      );
+    } else {
+      layers.push(
+        new LineLayer({
+          id: 'sel-edges',
+          data: nb,
+          getSourcePosition: (d, { target }) => endPos(d.edge, sideOf(d), target),
+          getTargetPosition: (d, { target }) => endPos(d.edge, 1 - sideOf(d), target),
+          getColor: selColor,
+          getWidth: 1.5,
+          widthUnits: 'pixels',
+          parameters: blendParams(false),
+          updateTriggers: { getSourcePosition: trig, getTargetPosition: trig },
+        }),
+      );
+    }
   }
 
+  const pops = usePops();
   const z = globeView ? globeZoom + 0.6 : map.getZoom();
   const sizeK = (0.25 + state.nodeSize * 2.2) * Math.min(1.6, 0.45 + 0.13 * z);
   const nodeOpacity = Math.min(0.9, 0.1 * Math.pow(2, z - 1) * (state.glow ? 1 : 2.5));
@@ -383,7 +759,7 @@ function networkLayers(globeView) {
       id: 'nodes',
       data: { length: G.n },
       getPosition: (_, { index, target }) => pos(index, target),
-      getRadius: (_, { index }) => (visibleNode(index) ? 0.6 + Math.log2(G.degree[index] + 1) * 0.55 : 0),
+      getRadius: (_, { index }) => (visibleNode(index) && !(pops && hasPops(index)) ? 0.6 + Math.log2(G.degree[index] + 1) * 0.55 : 0),
       getFillColor: (_, { index, target }) => {
         const o = index * 4;
         target[0] = nodeColor[o];
@@ -393,6 +769,7 @@ function networkLayers(globeView) {
         return target;
       },
       radiusUnits: 'pixels',
+      billboard: true,
       radiusMinPixels: 0,
       radiusScale: sizeK,
       opacity: nodeOpacity,
@@ -400,10 +777,42 @@ function networkLayers(globeView) {
       autoHighlight: true,
       highlightColor: [255, 255, 255, 255],
       parameters: blendParams(globeView),
-      updateTriggers: { getPosition: trig, getRadius: state.mode, getFillColor: `${showVectors}` },
+      updateTriggers: { getPosition: trig, getRadius: `${state.mode}|${pops}`, getFillColor: `${showVectors}` },
       transitions: { getPosition: TRANSITION },
     }),
   );
+
+  if (pops) {
+    layers.push(
+      new ScatterplotLayer({
+        id: 'pops',
+        data: { length: G.pop_node.length },
+        getPosition: (_, { index, target }) => popPos(index, target),
+        getRadius: (_, { index }) => {
+          const i = G.pop_node[index];
+          const w = Math.sqrt(G.pop_offset[i + 1] - G.pop_offset[i]);
+          return 0.8 + (Math.log2(G.degree[i] + 1) * 0.55) / w;
+        },
+        getFillColor: (_, { index, target }) => {
+          const o = G.pop_node[index] * 4;
+          target[0] = nodeColor[o];
+          target[1] = nodeColor[o + 1];
+          target[2] = nodeColor[o + 2];
+          target[3] = showVectors ? 255 : 0;
+          return target;
+        },
+        radiusUnits: 'pixels',
+        billboard: true,
+        radiusScale: sizeK,
+        opacity: Math.min(1, nodeOpacity * 1.5),
+        pickable: true,
+        autoHighlight: true,
+        highlightColor: [255, 255, 255, 255],
+        parameters: blendParams(globeView),
+        updateTriggers: { getPosition: trig, getFillColor: `${showVectors}` },
+      }),
+    );
+  }
 
   if (state.selected !== null) {
     layers.push(
@@ -413,6 +822,7 @@ function networkLayers(globeView) {
         getPosition: (i, { target }) => pos(i, target),
         getRadius: 9,
         radiusUnits: 'pixels',
+        billboard: true,
         stroked: true,
         filled: false,
         getLineColor: [255, 255, 255, 255],
@@ -432,7 +842,7 @@ const earth = (() => {
       id: 'ocean',
       data: [{ polygon: [[-180, 90], [0, 90], [180, 90], [180, -90], [0, -90], [-180, -90]] }],
       getPolygon: (d) => d.polygon,
-      getFillColor: [6, 10, 22, 255],
+      getFillColor: [4, 6, 11, 255],
     }),
     new GeoJsonLayer({
       id: 'land',
@@ -442,6 +852,15 @@ const earth = (() => {
       getFillColor: [22, 28, 40, 255],
       getLineColor: [60, 72, 96, 255],
       lineWidthMinPixels: 0.5,
+    }),
+    new GeoJsonLayer({
+      id: 'grid',
+      data: graticule,
+      stroked: true,
+      filled: false,
+      getLineColor: (f) => (f.properties.major ? [36, 50, 74, 200] : [24, 32, 50, 170]),
+      lineWidthUnits: 'pixels',
+      getLineWidth: (f) => (f.properties.major ? 0.9 : 0.6),
     }),
   ];
 })();
@@ -463,12 +882,26 @@ function render() {
 
 // --- interaction ---------------------------------------------------------
 
+function pickedNode(info) {
+  if (info.index < 0 || !info.layer) return null;
+  if (info.layer.id === 'nodes') return info.index;
+  if (info.layer.id === 'pops') return G.pop_node[info.index];
+  return null;
+}
+
 function onHover(info) {
   const tip = $('tooltip');
-  if (info.layer?.id === 'nodes' && info.index >= 0) {
-    const i = info.index;
+  const picked = pickedNode(info);
+  if (picked !== null) {
+    const i = picked;
     tip.hidden = false;
     tip.textContent = `AS${G.asn[i]} · ${G.names[i]} · ${G.degree[i]} links`;
+    tip.style.left = `${info.x + 12}px`;
+    tip.style.top = `${info.y + 12}px`;
+  } else if (info.layer?.id === 'fibers' && info.index >= 0) {
+    const f = computeFibers().fibers[info.index];
+    tip.hidden = false;
+    tip.textContent = `fiber: ${fmt(f.count)} links (${fmt(f.transit)} transit, ${fmt(f.peering)} peering)`;
     tip.style.left = `${info.x + 12}px`;
     tip.style.top = `${info.y + 12}px`;
   } else {
@@ -477,7 +910,8 @@ function onHover(info) {
 }
 
 function onClick(info) {
-  if (info.layer?.id === 'nodes' && info.index >= 0) select(info.index, false);
+  const picked = pickedNode(info);
+  if (picked !== null) select(picked, false);
   else if (!info.layer) select(null);
 }
 
@@ -500,6 +934,7 @@ function flyTo(i) {
   const lat = p[2 * i + 1];
   if (state.view === 'globe') {
     const vs = { longitude: lon, latitude: lat, zoom: 2.2, transitionDuration: 1200 };
+    globeCam = vs;
     ensureGlobe().setProps({ initialViewState: vs });
   } else {
     map.flyTo({ center: [lon, lat], zoom: Math.max(map.getZoom(), state.mode === 'cyber' ? 5 : 6), speed: 1.4 });
@@ -618,6 +1053,10 @@ function wireSearch() {
 
 function syncControls() {
   $('samplingLabel').textContent = G ? samplingLabel() : '';
+  const fib = state.fibers && G && fiberCache.value;
+  $('fiberLabel').textContent = fib
+    ? `~${Math.round(fiberCellSize() * 40075)} km cells · ${fmt(fib.fibers.length)} fibers carrying ${fmt(fib.bundled)} links`
+    : '';
   for (const b of $('mode').children) b.classList.toggle('on', b.dataset.v === state.mode);
   for (const b of $('view').children) b.classList.toggle('on', b.dataset.v === state.view);
   $('basemap').value = state.basemap;
@@ -629,17 +1068,41 @@ function syncControls() {
 function writeHash() {
   const h = new URLSearchParams();
   if (G) h.set('data', G.id);
-  h.set('mode', state.mode);
-  h.set('view', state.view);
-  h.set('basemap', state.basemap);
-  if (state.backboneOnly) h.set('backbone', '1');
-  if (state.sampling < 1) h.set('sample', state.sampling.toFixed(2));
-  const c = map.getCenter();
-  h.set('lon', c.lng.toFixed(3));
-  h.set('lat', c.lat.toFixed(3));
-  h.set('z', map.getZoom().toFixed(2));
+  for (const [field, key, type] of PARAMS) {
+    const v = state[field];
+    h.set(key, type === 'bool' ? (v ? '1' : '0') : type === 'num' ? String(+v.toFixed(2)) : v);
+  }
+  // camera: the globe's when it's showing (zoom stored in map units)
+  if (state.view === 'globe' && globeCam) {
+    h.set('lon', globeCam.longitude.toFixed(3));
+    h.set('lat', globeCam.latitude.toFixed(3));
+    h.set('z', (globeCam.zoom + 0.6).toFixed(2));
+  } else {
+    const c = map.getCenter();
+    h.set('lon', c.lng.toFixed(3));
+    h.set('lat', c.lat.toFixed(3));
+    h.set('z', map.getZoom().toFixed(2));
+  }
   if (state.selected !== null && G) h.set('as', G.asn[state.selected]);
   history.replaceState(null, '', `#${h}`);
+}
+
+let hashTimer = null;
+function writeHashSoon() {
+  clearTimeout(hashTimer);
+  hashTimer = setTimeout(writeHash, 250);
+}
+
+// Push state into every control (on load, and whenever state changes in code).
+function applyControls() {
+  for (const [field, , type] of PARAMS) {
+    const el = $(field);
+    if (!el) continue;
+    if (type === 'bool') el.checked = state[field];
+    else if (type === 'num') el.value = Math.round(state[field] * 100);
+    else if (el.tagName === 'SELECT') el.value = state[field];
+  }
+  syncControls();
 }
 
 function wireControls() {
@@ -655,7 +1118,9 @@ function wireControls() {
     if (!v || v === state.view) return;
     if (v === 'globe') {
       const c = map.getCenter();
-      ensureGlobe().setProps({ initialViewState: { longitude: c.lng, latitude: c.lat, zoom: Math.max(map.getZoom() - 0.6, 0) } });
+      const zoom = Math.max(map.getZoom() - 0.6, 0);
+      ensureGlobe().setProps({ initialViewState: (globeCam = { longitude: c.lng, latitude: c.lat, zoom }) });
+      globeZoom = zoom; // link opacity follows the globe's zoom; keep it in sync
     }
     state.view = v;
     render();
@@ -676,7 +1141,10 @@ function wireControls() {
   slider('altitude', 'altitude');
   $('sampling').value = Math.round(state.sampling * 100);
   slider('sampling', 'sampling');
-  for (const [id, key] of [['showTransit', 'showTransit'], ['showPeering', 'showPeering'], ['glow', 'glow'], ['backboneOnly', 'backboneOnly']]) {
+  $('fiberCell').value = Math.round(state.fiberCell * 100);
+  slider('fiberCell', 'fiberCell');
+  slider('fiberWidth', 'fiberWidth');
+  for (const [id, key] of [['showTransit', 'showTransit'], ['showPeering', 'showPeering'], ['glow', 'glow'], ['backboneOnly', 'backboneOnly'], ['pops', 'pops'], ['fibers', 'fibers']]) {
     $(id).checked = state[key];
     $(id).addEventListener('change', (e) => {
       state[key] = e.target.checked;
@@ -716,6 +1184,10 @@ async function load(id) {
   $('stats').textContent = 'loading…';
   G = await loadBundle(DATA_BASE, id);
   rankCum = null;
+  routeLF = null;
+  fiberCache = { key: null, value: null };
+  arcCache.clear();
+  for (const k of Object.keys(lengthFactor)) delete lengthFactor[k];
   lowerNames = G.names.map((s) => s.toLowerCase());
   buildColours();
   tilesMeta = {};
@@ -730,6 +1202,7 @@ async function load(id) {
   const hasTiles = TILE_SERVER || Object.keys(tilesMeta).length > 0;
   $('renderer').querySelector('[value="raster"]').disabled = !hasTiles;
   if (!hasTiles) state.renderer = 'vector';
+  applyControls();
 
   const m = G.meta;
   $('banner').hidden = !m.synthetic;
@@ -751,6 +1224,7 @@ async function load(id) {
 
 async function boot() {
   wireControls();
+  applyControls();
   wireSearch();
   const sets = await listDatasets(DATA_BASE);
   if (!sets.length) {
@@ -765,5 +1239,12 @@ async function boot() {
   map.on('load', () => updateRaster());
   await load(state.dataset);
 }
+
+// Console / automation handle: netmap.state, netmap.render(), netmap.layers().
+window.netmap = {
+  state,
+  render: () => render(),
+  layers: () => (state.view === 'globe' ? globe?.props.layers : overlay._props?.layers || []).map((l) => l.id),
+};
 
 boot();
