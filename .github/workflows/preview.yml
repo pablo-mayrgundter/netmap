@@ -1,7 +1,8 @@
-# Per-PR preview of the viewer at <pages-url>/pr-preview/pr-<N>/ via
-# rossjrw/pr-preview-action. Previews build the viewer only and read the map
-# data already published at the site root (../../data), so they are fast.
-# Removed automatically when the PR closes.
+# Per-PR preview at <pages-url>/pr-preview/pr-<N>/ via rossjrw/pr-preview-action.
+# Each preview builds its own map bundle from the latest CAIDA snapshot (about
+# a minute with the native kernels) plus shallow raster tiles, so pipeline
+# changes show up in the preview, not just viewer changes. Removed when the PR
+# closes.
 name: preview
 
 on:
@@ -17,19 +18,34 @@ concurrency: preview-${{ github.ref }}
 jobs:
   preview:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        if: github.event.action != 'closed'
+        with:
+          python-version: "3.12"
       - uses: actions/setup-node@v4
         if: github.event.action != 'closed'
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - uses: actions/cache@v4
+        if: github.event.action != 'closed'
+        with:
+          path: data/raw
+          key: raw-${{ github.run_id }}
+          restore-keys: raw-
+      - name: Build map bundle
+        if: github.event.action != 'closed'
+        run: |
+          pip install -e pipeline
+          python -m netmap build --topology caida --name internet
+          python -m netmap tiles web/public/data/internet --format webp --maxzoom 3
       - name: Build viewer
         if: github.event.action != 'closed'
         working-directory: web
-        env:
-          VITE_DATA_BASE: ../../data
         run: npm ci && npm run build
       - uses: rossjrw/pr-preview-action@v1
         with:

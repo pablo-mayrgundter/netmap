@@ -196,9 +196,9 @@ Everything is served statically from the `gh-pages` branch:
 * `preview.yml` uses
   [rossjrw/pr-preview-action](https://github.com/rossjrw/pr-preview-action)
   to publish each PR's viewer to `/pr-preview/pr-<N>/` and comment the link
-  on the PR. The preview is removed when the PR closes. Previews only rebuild
-  the viewer and read the production data at `../../data`, so they take about
-  a minute.
+  on the PR. The preview is removed when the PR closes. Each preview builds
+  its own CAIDA bundle and shallow tiles, about 2 minutes, so pipeline
+  changes show up too.
 * `ci.yml` runs the pipeline tests and the viewer build.
 
 One-time setup: **Settings → Pages → Build and deployment → Source: Deploy
