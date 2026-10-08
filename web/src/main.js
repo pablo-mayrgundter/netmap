@@ -80,7 +80,7 @@ function ensureGlobe() {
   globe = new Deck({
     parent: $('globe'),
     views: new GlobeView({ resolution: 5 }),
-    initialViewState: { longitude: c.lng, latitude: c.lat, zoom: Math.max(map.getZoom() - 0.6, 0) },
+    initialViewState: { longitude: c.lng, latitude: c.lat, zoom: (globeZoom = Math.max(map.getZoom() - 0.6, 0)) },
     controller: true,
     layers: [],
     onHover: onHover,
@@ -658,7 +658,9 @@ function wireControls() {
     if (!v || v === state.view) return;
     if (v === 'globe') {
       const c = map.getCenter();
-      ensureGlobe().setProps({ initialViewState: { longitude: c.lng, latitude: c.lat, zoom: Math.max(map.getZoom() - 0.6, 0) } });
+      const zoom = Math.max(map.getZoom() - 0.6, 0);
+      ensureGlobe().setProps({ initialViewState: { longitude: c.lng, latitude: c.lat, zoom } });
+      globeZoom = zoom; // link opacity follows the globe's zoom; keep it in sync
     }
     state.view = v;
     render();
