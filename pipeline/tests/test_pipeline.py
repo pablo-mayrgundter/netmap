@@ -1,0 +1,209 @@
+import bz2
+import gzip
+import json
+
+import igraph as ig
+import numpy as np
+import pytest
+
+from netmap import asrel, export, geo, layout, metrics, tiles
+from netmap.iata import Gazetteer, Place
+from netmap.regions import REGIONS
+
+
+def test_overlap_join():
+    a_s = np.array([0, 100, 300], np.uint64)
+    a_e = np.array([99, 199, 399], np.uint64)
+    b_s = np.array([50, 150, 350], np.uint64)
+    b_e = np.array([149, 349, 1000], np.uint64)
+    ia, ib, w = geo.overlap_join(a_s, a_e, b_s, b_e)
+    got = sorted(zip(ia.tolist(), ib.tolist(), w.tolist()))
+    assert got == [(0, 0, 50.0), (1, 0, 50.0), (1, 1, 50.0), (2, 1, 50.0), (2, 2, 50.0)]
+
+
+def test_range_to_cidrs():
+    assert geo.range_to_cidrs(int(0x0A000000), int(0x0A0000FF)) == ["10.0.0.0/24"]
+    assert geo.range_to_cidrs(int(0x0A000000), int(0x0A000180)) == ["10.0.0.0/24", "10.0.1.0/25", "10.0.1.128/32"]
+
+
+def _prefix_and_geo():
+    # AS 1: all in Paris; AS 2: half Paris, half Tokyo.
+    pfx = geo.PrefixTable(
+        start=np.array([0, 1000, 2000], np.uint64),
+        end=np.array([999, 1999, 2999], np.uint64),
+        asn=np.array([1, 2, 2], np.uint32),
+        names={1: "One", 2: "Two"},
+    )
+    g = geo.GeoTable(
+        start=np.array([0, 1500, 2000], np.uint64),
+        end=np.array([1499, 1999, 2999], np.uint64),
+        lat=np.array([48.85, 35.68, 35.68], np.float32),
+        lon=np.array([2.35, 139.69, 139.69], np.float32),
+        cc=np.array([0, 1, 1], np.int16),
+        city=np.array([0, 1, 1], np.int32),
+        countries=["FR", "JP"],
+        cities=["Paris", "Tokyo"],
+    )
+    return pfx, g
+
+
+def test_profile_ases():
+    pfx, g = _prefix_and_geo()
+    p = geo.profile_ases(pfx, g)
+    ix = p.index()
+    one, two = ix[1], ix[2]
+    assert p.addrs[one] == 1000 and p.addrs[two] == 2000
+    assert p.country[one] == "FR" and p.concentration[one] == pytest.approx(1.0)
+    # AS 2 has 500 addrs in Paris and 1500 in Tokyo: Tokyo dominates.
+    assert p.country[two] == "JP"
+    assert p.lat[two] == pytest.approx(35.68, abs=0.01)
+    assert p.concentration[two] == pytest.approx(0.75)
+    assert p.sites[two][0][3] == "Tokyo"
+
+
+def test_parse_asrel_and_as2org(tmp_path):
+    rel = tmp_path / "20260101.as-rel2.txt.bz2"
+    rel.write_bytes(bz2.compress(b"# comment\n1|2|-1|bgp\n2|3|0|mlp\n1|3|-1\n"))
+    t = asrel.parse_asrel(rel)
+    assert t.asns.tolist() == [1, 2, 3]
+    assert t.e == 3 and t.rel.tolist() == [-1, 0, -1]
+
+    org = tmp_path / "x.as-org2info.txt.gz"
+    org.write_bytes(gzip.compress(
+        b"# format:org_id|changed|org_name|country|source\nO1|x|Org One|US|ARIN\n"
+        b"# format:aut|changed|aut_name|org_id|opaque_id|source\n1|x|ONE-AS|O1||ARIN\n"
+    ))
+    o = asrel.parse_as2org(org)
+    assert o[1].org == "Org One" and o[1].country == "US" and o[1].name == "ONE-AS"
+
+
+def test_mercator_roundtrip():
+    lon = np.array([-170.0, 0.0, 151.2])
+    lat = np.array([-60.0, 0.0, 70.5])
+    x, y = layout.lonlat_to_merc(lon, lat)
+    lo, la = layout.merc_to_lonlat(x, y)
+    assert np.allclose(lo, lon) and np.allclose(la, lat)
+
+
+def test_sunflower_separates_colocated():
+    lat = np.full(20, 40.0)
+    lon = np.full(20, -74.0)
+    w = np.arange(20, dtype=float)
+    lo, la = layout.sunflower(lon, lat, w, np.ones(20, bool))
+    pts = np.stack([lo, la], 1)
+    assert len({(round(a, 6), round(b, 6)) for a, b in pts}) == 20
+    # Heaviest stays on the site.
+    assert lo[19] == pytest.approx(-74.0) and la[19] == pytest.approx(40.0)
+
+
+def _tiny_topology():
+    # A star of 4 leaves around 0, plus a chain 0-5-6.
+    edges = [(0, 1), (0, 2), (0, 3), (0, 4), (0, 5), (5, 6)]
+    t = asrel.Topology(
+        asns=np.arange(100, 107, dtype=np.uint32),
+        src=np.array([a for a, _ in edges], np.int32),
+        dst=np.array([b for _, b in edges], np.int32),
+        rel=np.array([-1, -1, -1, -1, 0, -1], np.int8),
+    )
+    return t
+
+
+def test_metrics_cone_and_level():
+    t = _tiny_topology()
+    m = metrics.compute(t)
+    assert m.cone[0] == 5  # itself + 4 customers (peer 5 not in cone)
+    assert m.cone[5] == 2
+    assert m.customers[0] == 4 and m.peers[0] == 1 and m.providers[1] == 1
+    assert m.rank[0] == 1 and 0 <= m.level.min() and m.level.max() <= 1
+
+
+def test_hybrid_keeps_pins_and_places_free_nodes_between():
+    t = _tiny_topology()
+    g = metrics.graph_of(t)
+    lat = np.array([0, 10, -10, 10, -10, 0, 0.0])
+    lon = np.array([0, 10, 10, -10, -10, 40, 60.0])
+    pinned = np.array([False, True, True, True, True, False, True])
+    cyber = layout.cyber(g)
+    lo, la = layout.hybrid(g, lat, lon, pinned, cyber, fr_iters=0)
+    assert np.allclose(lo[pinned], lon[pinned], atol=1e-6)
+    assert np.allclose(la[pinned], lat[pinned], atol=1e-3)
+    # Node 0 is surrounded by its four pinned customers (and a free peer).
+    assert abs(lo[0]) < 15 and abs(la[0]) < 5
+    # Node 5 sits between 0 and its pinned customer 6 at lon 60.
+    assert lo[0] < lo[5] < 60
+
+
+def test_cyber_layout_in_mercator_square():
+    g = ig.Graph.Barabasi(300, 2, directed=False)
+    lo, la = layout.cyber(g, algo="fr")
+    assert np.all(np.abs(lo) < 180) and np.all(np.abs(la) < 85.06)
+    assert len(np.unique(np.round(lo, 4))) > 250
+
+
+def _bundle(tmp_path):
+    t = _tiny_topology()
+    m = metrics.compute(t)
+    g = metrics.graph_of(t)
+    n = t.n
+    cyber = layout.cyber(g)
+    lat = np.linspace(-40, 40, n)
+    lon = np.linspace(-100, 100, n)
+    has_geo = np.ones(n, bool)
+    has_geo[6] = False
+    out = tmp_path / "b"
+    export.write_bundle(
+        out, name="tiny", topo=t, metrics=m, prof_rows=None,
+        layouts={"cyber": cyber, "geo": (lon, lat), "hybrid": (lon, lat)},
+        region_idx=np.arange(n) % len(REGIONS), has_geo=has_geo, pinned=has_geo,
+        names=[f"AS{a}" for a in t.asns], info_records=[{"asn": int(a)} for a in t.asns],
+        attribution=["test"],
+    )
+    return out, t
+
+
+def test_bundle_roundtrip(tmp_path):
+    out, t = _bundle(tmp_path)
+    meta, a = export.read_bundle(out)
+    assert meta["counts"]["nodes"] == 7 and meta["counts"]["p2p"] == 1
+    assert a["asn"].tolist() == t.asns.tolist()
+    assert a["edges"].shape == (6, 2) and a["edges"][5].tolist() == [5, 6]
+    assert a["flags"][6] == 0 and a["flags"][0] == 3
+    assert json.loads((out / "info" / "0.json").read_text())[3]["asn"] == 103
+
+
+def test_tiles_render_and_pyramid(tmp_path):
+    out, _ = _bundle(tmp_path)
+    sc = tiles.Scene(out, "geo")
+    assert len(sc.es) == 5  # edge 5-6 hidden: node 6 has no geo
+    rgba = tiles.render(sc, 0, 0, 0)
+    assert rgba.shape == (256, 256, 4) and rgba[..., 3].max() > 0
+    n = tiles.pyramid(out, out / "tiles", "cyber", maxzoom=2)
+    assert n >= 1 and (out / "tiles" / "cyber" / "0" / "0" / "0.png").exists()
+    tj = json.loads((out / "tiles" / "cyber" / "tiles.json").read_text())
+    assert tj["maxzoom"] == 2 and tj["count"] == n
+
+
+def test_clip_segments():
+    ok, x0, y0, x1, y1 = tiles._clip(
+        np.array([-10.0, 5.0, -10.0]), np.array([5.0, 5.0, -10.0]),
+        np.array([20.0, 6.0, -5.0]), np.array([5.0, 6.0, -5.0]), 0.0, 10.0,
+    )
+    assert ok.tolist() == [True, True, False]
+    assert (x0[0], x1[0]) == (0.0, 10.0)
+
+
+def test_iata_hints():
+    gz = Gazetteer(
+        {
+            "dfw": Place("DFW", "Dallas", 32.9, -97.0),
+            "ams": Place("AMS", "Amsterdam", 52.3, 4.8),
+            "lhr": Place("LHR", "London", 51.5, -0.45),
+            "net": Place("NET", "Nowhere", 0, 0),
+        },
+        {"frankfurt": Place("FRA", "Frankfurt", 50.0, 8.6)},
+    )
+    assert gz.locate("be3037.ccr21.dfw01.atlas.cogentco.com").code == "DFW"
+    assert gz.locate("ae2.cs1.ams17.nl.eth.zayo.com").code == "AMS"
+    assert gz.locate("ae-1-3502.edge4.Frankfurt1.Level3.net").name == "Frankfurt"
+    assert gz.locate("lhr25s34-in-f14.1e100.net").code == "LHR"
+    assert gz.locate("host-1-2-3-4.example.net") is None

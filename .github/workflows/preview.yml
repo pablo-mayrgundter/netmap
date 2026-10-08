@@ -1,0 +1,36 @@
+# Per-PR preview of the viewer at <pages-url>/pr-preview/pr-<N>/ via
+# rossjrw/pr-preview-action. Previews build the viewer only and read the map
+# data already published at the site root (../../data), so they are fast.
+# Removed automatically when the PR closes.
+name: preview
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency: preview-${{ github.ref }}
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        if: github.event.action != 'closed'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build viewer
+        if: github.event.action != 'closed'
+        working-directory: web
+        env:
+          VITE_DATA_BASE: ../../data
+        run: npm ci && npm run build
+      - uses: rossjrw/pr-preview-action@v1
+        with:
+          source-dir: ./web/dist/
