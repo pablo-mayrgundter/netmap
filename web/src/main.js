@@ -3,7 +3,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { Deck, _GlobeView as GlobeView } from '@deck.gl/core';
 import { MapboxOverlay } from '@deck.gl/mapbox';
 import { DataFilterExtension } from '@deck.gl/extensions';
-import { ArcLayer, LineLayer, ScatterplotLayer, GeoJsonLayer, SolidPolygonLayer } from '@deck.gl/layers';
+import { LineLayer, PathLayer, ScatterplotLayer, GeoJsonLayer, SolidPolygonLayer } from '@deck.gl/layers';
 import { feature } from 'topojson-client';
 import countries110 from 'world-atlas/countries-110m.json';
 
@@ -26,7 +26,10 @@ const BASEMAPS = {
   },
 };
 
-const ALT_MAX_M = 2_500_000;
+// Core networks hover this high (at full hierarchy level, default slider) on
+// the globe: high enough to read as a layer above the cities, low enough that
+// zooming in doesn't put them in the camera's face.
+const ALT_MAX_M = 700_000;
 
 // --- state ---------------------------------------------------------------
 
@@ -199,6 +202,21 @@ function edgeLengthFactor(mode) {
   return (lengthFactor[key] = f);
 }
 
+let routeLF = null;
+function routeLengthFactor() {
+  if (routeLF) return routeLF;
+  const r = G.pop_routes;
+  const f = new Float32Array(r.length / 2);
+  for (let k = 0; k < f.length; k++) {
+    const a = r[2 * k];
+    const b = r[2 * k + 1];
+    const dLon = Math.abs(G.pop_pos[2 * a] - G.pop_pos[2 * b]);
+    const len = Math.hypot(Math.min(dLon, 360 - dLon), G.pop_pos[2 * a + 1] - G.pop_pos[2 * b + 1]) / 360;
+    f[k] = Math.min(1, Math.pow(0.012 / Math.max(len, 1e-7), 0.6));
+  }
+  return (routeLF = f);
+}
+
 // --- positions -----------------------------------------------------------
 
 const hasGeo = (i) => (G.flags[i] & 1) === 1;
@@ -207,7 +225,7 @@ const visibleNode = (i) => state.mode !== 'geo' || hasGeo(i);
 function altitude(i) {
   if (state.view !== 'globe') return 0;
   const l = G.level[i];
-  return Math.pow(l, 1.8) * ALT_MAX_M * state.altitude * 2;
+  return Math.pow(l, 1.5) * ALT_MAX_M * state.altitude * 2;
 }
 
 function pos(i, target, mode = state.mode) {
@@ -238,6 +256,73 @@ function endPos(k, side, target, mode = state.mode) {
     if (p >= 0) return popPos(p, target);
   }
   return pos(G.edges[2 * k + side], target, mode);
+}
+
+// --- globe arcs ----------------------------------------------------------
+// Links on the globe are paths we build here: great-circle interpolation
+// between the two ends' altitudes plus a gentle sin-shaped lift. (deck's
+// ArcLayer in GlobeView lofts arcs thousands of km up, so from above they
+// read as radial dashes.) Short links get 1-2 segments, long ones up to 16.
+const D2R = Math.PI / 180;
+function buildArcs(count, ends, liftK) {
+  const a = [0, 0, 0];
+  const b = [0, 0, 0];
+  const segs = new Uint8Array(count);
+  let total = 0;
+  for (let k = 0; k < count; k++) {
+    ends(k, a, b);
+    const dLat = (b[1] - a[1]) * D2R;
+    const dLon = (b[0] - a[0]) * D2R;
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(a[1] * D2R) * Math.cos(b[1] * D2R) * Math.sin(dLon / 2) ** 2;
+    const ang = 2 * Math.asin(Math.min(1, Math.sqrt(h)));
+    segs[k] = Math.max(1, Math.min(16, Math.ceil(ang / (4 * D2R))));
+    total += segs[k] + 1;
+  }
+  const path = new Float32Array(total * 3);
+  const startIndices = new Uint32Array(count);
+  let v = 0;
+  for (let k = 0; k < count; k++) {
+    ends(k, a, b);
+    startIndices[k] = v;
+    const n = segs[k];
+    const la0 = a[1] * D2R, lo0 = a[0] * D2R, la1 = b[1] * D2R, lo1 = b[0] * D2R;
+    const x0 = Math.cos(la0) * Math.cos(lo0), y0 = Math.cos(la0) * Math.sin(lo0), z0 = Math.sin(la0);
+    const x1 = Math.cos(la1) * Math.cos(lo1), y1 = Math.cos(la1) * Math.sin(lo1), z1 = Math.sin(la1);
+    const ang = Math.acos(Math.max(-1, Math.min(1, x0 * x1 + y0 * y1 + z0 * z1)));
+    const lift = Math.min(ang * 6.371e6 * liftK, 250e3);
+    const so = Math.sin(ang);
+    let prevLon = a[0];
+    for (let i = 0; i <= n; i++) {
+      const t = i / n;
+      let x, y, z;
+      if (so < 1e-6) {
+        x = x0 + (x1 - x0) * t; y = y0 + (y1 - y0) * t; z = z0 + (z1 - z0) * t;
+      } else {
+        const w0 = Math.sin((1 - t) * ang) / so;
+        const w1 = Math.sin(t * ang) / so;
+        x = w0 * x0 + w1 * x1; y = w0 * y0 + w1 * y1; z = w0 * z0 + w1 * z1;
+      }
+      let lon = Math.atan2(y, x) / D2R;
+      // Keep longitudes continuous across the antimeridian.
+      while (lon - prevLon > 180) lon -= 360;
+      while (lon - prevLon < -180) lon += 360;
+      prevLon = lon;
+      path[3 * v] = lon;
+      path[3 * v + 1] = Math.atan2(z, Math.hypot(x, y)) / D2R;
+      path[3 * v + 2] = a[2] + (b[2] - a[2]) * t + lift * Math.sin(Math.PI * t);
+      v++;
+    }
+  }
+  return { length: count, startIndices, attributes: { getPath: { value: path, size: 3 } } };
+}
+
+const arcCache = new Map();
+function cachedArcs(key, count, ends, liftK) {
+  if (!arcCache.has(key)) {
+    if (arcCache.size > 6) arcCache.clear();
+    arcCache.set(key, buildArcs(count, ends, liftK));
+  }
+  return arcCache.get(key);
 }
 
 // --- layers --------------------------------------------------------------
@@ -336,26 +421,22 @@ function networkLayers(globeView) {
 
   if (showVectors) {
     if (globeView) {
+      const data = cachedArcs(`edges|${trig}`, G.e, (k, a, b) => (endPos(k, 0, a), endPos(k, 1, b)), 0.03);
       layers.push(
-        new ArcLayer({
+        new PathLayer({
           id: 'edges',
-          data: edgeData,
-          getSourcePosition: src,
-          getTargetPosition: dst,
-          getSourceColor: getEdgeColor,
-          getTargetColor: getEdgeColor,
-          getHeight: (_, { index }) => 0.08 + 0.35 * Math.max(G.level[G.edges[2 * index]], G.level[G.edges[2 * index + 1]]) * state.altitude,
-          greatCircle: true,
-          numSegments: 20,
+          data,
+          _pathType: 'open',
+          getColor: getEdgeColor,
           opacity,
           extensions: G.edge_rank ? [new DataFilterExtension({ filterSize: 1 })] : [],
           getFilterValue: (_, { index }) => (G.edge_rank ? G.edge_rank[index] : 0),
           filterRange: [0, sampleK()],
           getWidth: 1,
           widthUnits: 'pixels',
+          billboard: true,
           parameters: blendParams(true),
-          updateTriggers: { getSourcePosition: trig, getTargetPosition: trig, getSourceColor: colourTrig, getTargetColor: colourTrig, getHeight: trig },
-          transitions: { getSourcePosition: TRANSITION, getTargetPosition: TRANSITION },
+          updateTriggers: { getColor: colourTrig },
         }),
       );
     } else {
@@ -384,15 +465,17 @@ function networkLayers(globeView) {
     const routeData = { length: G.pop_routes.length / 2 };
     const rsrc = (_, { index, target }) => popPos(G.pop_routes[2 * index], target);
     const rdst = (_, { index, target }) => popPos(G.pop_routes[2 * index + 1], target);
+    const rlf = routeLengthFactor();
     const rcol = (_, { index, target }) => {
       const o = G.pop_node[G.pop_routes[2 * index]] * 4;
       target[0] = nodeColor[o];
       target[1] = nodeColor[o + 1];
       target[2] = nodeColor[o + 2];
-      target[3] = 255;
+      target[3] = 255 * rlf[index];
       return target;
     };
-    const routeOpacity = Math.min(0.9, opacity * 6);
+    // Core routes are few (25k) next to the links, so they can be brighter.
+    const routeOpacity = Math.min(0.8, opacity * 2.5);
     const common = {
       id: 'routes',
       data: routeData,
@@ -404,35 +487,62 @@ function networkLayers(globeView) {
       parameters: blendParams(globeView),
       updateTriggers: { getSourcePosition: trig, getTargetPosition: trig },
     };
-    layers.push(
-      globeView
-        ? new ArcLayer({ ...common, getSourceColor: rcol, getTargetColor: rcol, getHeight: 0.12, greatCircle: true, numSegments: 32 })
-        : new LineLayer({ ...common, getColor: rcol }),
-    );
+    if (globeView) {
+      const r = G.pop_routes;
+      const data = cachedArcs(`routes|${trig}`, routeData.length, (k, a, b) => (popPos(r[2 * k], a), popPos(r[2 * k + 1], b)), 0.03);
+      layers.push(
+        new PathLayer({
+          id: 'routes',
+          data,
+          _pathType: 'open',
+          getColor: rcol,
+          opacity: routeOpacity,
+          updateTriggers: { getColor: G.id },
+          getWidth: 1.2,
+          widthUnits: 'pixels',
+          billboard: true,
+          parameters: blendParams(true),
+        }),
+      );
+    } else {
+      layers.push(new LineLayer({ ...common, getColor: rcol }));
+    }
   }
 
   // Selection: the selected AS's links, bright.
   if (state.selected !== null) {
     const nb = G.neighbours(state.selected);
     const sideOf = (d) => (G.edges[2 * d.edge] === state.selected ? 0 : 1);
-    const LinkLayer = globeView ? ArcLayer : LineLayer;
-    layers.push(
-      new LinkLayer({
-        id: 'sel-edges',
-        data: nb,
-        getSourcePosition: (d, { target }) => endPos(d.edge, sideOf(d), target),
-        getTargetPosition: (d, { target }) => endPos(d.edge, 1 - sideOf(d), target),
-        getColor: (d) => (G.edge_rel[d.edge] === -1 ? [255, 255, 255, 200] : [140, 220, 255, 150]),
-        getSourceColor: [255, 255, 255, 220],
-        getTargetColor: (d) => (G.edge_rel[d.edge] === -1 ? [255, 255, 255, 160] : [140, 220, 255, 120]),
-        getHeight: 0.25,
-        greatCircle: true,
-        getWidth: 1.5,
-        widthUnits: 'pixels',
-        parameters: blendParams(globeView),
-        updateTriggers: { getSourcePosition: trig, getTargetPosition: trig },
-      }),
-    );
+    const selColor = (d) => (G.edge_rel[d.edge] === -1 ? [255, 255, 255, 200] : [140, 220, 255, 150]);
+    if (globeView) {
+      const data = buildArcs(nb.length, (k, a, b) => (endPos(nb[k].edge, sideOf(nb[k]), a), endPos(nb[k].edge, 1 - sideOf(nb[k]), b)), 0.05);
+      layers.push(
+        new PathLayer({
+          id: 'sel-edges',
+          data,
+          _pathType: 'open',
+          getColor: (_, { index }) => selColor(nb[index]),
+          getWidth: 1.5,
+          widthUnits: 'pixels',
+          billboard: true,
+          parameters: blendParams(true),
+        }),
+      );
+    } else {
+      layers.push(
+        new LineLayer({
+          id: 'sel-edges',
+          data: nb,
+          getSourcePosition: (d, { target }) => endPos(d.edge, sideOf(d), target),
+          getTargetPosition: (d, { target }) => endPos(d.edge, 1 - sideOf(d), target),
+          getColor: selColor,
+          getWidth: 1.5,
+          widthUnits: 'pixels',
+          parameters: blendParams(false),
+          updateTriggers: { getSourcePosition: trig, getTargetPosition: trig },
+        }),
+      );
+    }
   }
 
   const pops = usePops();
@@ -454,6 +564,7 @@ function networkLayers(globeView) {
         return target;
       },
       radiusUnits: 'pixels',
+      billboard: true,
       radiusMinPixels: 0,
       radiusScale: sizeK,
       opacity: nodeOpacity,
@@ -486,6 +597,7 @@ function networkLayers(globeView) {
           return target;
         },
         radiusUnits: 'pixels',
+        billboard: true,
         radiusScale: sizeK,
         opacity: Math.min(1, nodeOpacity * 1.5),
         pickable: true,
@@ -505,6 +617,7 @@ function networkLayers(globeView) {
         getPosition: (i, { target }) => pos(i, target),
         getRadius: 9,
         radiusUnits: 'pixels',
+        billboard: true,
         stroked: true,
         filled: false,
         getLineColor: [255, 255, 255, 255],
@@ -820,6 +933,9 @@ async function load(id) {
   $('stats').textContent = 'loading…';
   G = await loadBundle(DATA_BASE, id);
   rankCum = null;
+  routeLF = null;
+  arcCache.clear();
+  for (const k of Object.keys(lengthFactor)) delete lengthFactor[k];
   lowerNames = G.names.map((s) => s.toLowerCase());
   buildColours();
   tilesMeta = {};
@@ -869,5 +985,12 @@ async function boot() {
   map.on('load', () => updateRaster());
   await load(state.dataset);
 }
+
+// Console / automation handle: netmap.state, netmap.render(), netmap.layers().
+window.netmap = {
+  state,
+  render: () => render(),
+  layers: () => (state.view === 'globe' ? globe?.props.layers : overlay._props?.layers || []).map((l) => l.id),
+};
 
 boot();
