@@ -30,7 +30,7 @@ DB-IP lite    ──►│  per-AS   │   tiles.py   XYZ PNG pyramid /      │
 ## Quick start
 
 ```sh
-pip install -e pipeline            # numpy, scipy, igraph, pycairo
+pip install -e pipeline            # numpy, scipy, igraph, pillow
 
 # Real topology from CAIDA (downloads ~50 MB + ~150 MB of geo/prefix data, cached in data/raw)
 python -m netmap build --topology caida --name internet
