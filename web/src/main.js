@@ -138,8 +138,11 @@ function updateRaster() {
   if (map.getSource('net')) map.removeSource('net');
   if (state.renderer !== 'raster' || !G) return;
   const base = TILE_SERVER || `${G.root}/tiles`;
-  const layer = state.backboneOnly ? `backbone/${state.mode}` : state.mode;
-  const tm = tilesMeta[layer] || tilesMeta[state.mode] || {};
+  // Backbone-only tiles are optional (`netmap tiles --backbone`); fall back to
+  // the full-link pyramid rather than requesting tiles that don't exist.
+  const bb = `backbone/${state.mode}`;
+  const layer = state.backboneOnly && !TILE_SERVER && tilesMeta[bb] ? bb : state.mode;
+  const tm = tilesMeta[layer] || {};
   map.addSource('net', {
     type: 'raster',
     tiles: [`${base}/${layer}/{z}/{x}/{y}.png`],
