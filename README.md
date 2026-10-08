@@ -60,12 +60,35 @@ cyber layout is computed from.
 Keys: `1` cyber · `2` hybrid · `3` geo · `g` globe · `/` search · `Esc` deselect.
 The URL hash keeps mode, view, camera and selected AS, so links are shareable.
 
-Full-size build on a 4-core box (84k ASes, about 350k links) takes about
-3 minutes. Most of that is LGL (about 1.5 min) and, for synthetic builds,
-generating the graph. Parsing DB-IP adds about 20 s the first time only.
-Raster tiles take about 1 s each, so a z0–4 pyramid of all three modes is a
-few minutes. `--cyber drl` and `--fr-iters` are available, but they're much
-slower at this scale.
+A full CAIDA build (81k ASes, 657k links) takes about 35 s on a 4-core
+box. The cyber layout is 4–5 s of that, using the native parallel LGL below.
+Parsing DB-IP adds about 20 s the first time only. Raster tiles take
+0.05–0.2 s each.
+
+**Native LGL** (`pipeline/netmap/native/lgl.c`) is a reimplementation of
+LGL (Adai et al. 2004) using igraph's scheme: BFS layers, placement around
+parents, grid-cutoff Fruchterman–Reingold, the same cooling. It's built for
+throughput:
+
+* nodes are relabelled in BFS order, so the placed set is an array prefix;
+* every iteration counting-sorts nodes into grid cells, so the repulsion loop
+  over neighbouring cells is contiguous, branch-free and sqrt-free, and the
+  compiler vectorizes it (AVX2, NEON, or wasm SIMD128);
+* a small pthread pool with dynamic chunks runs repulsion, attraction and the
+  grid build;
+* positions are double-buffered, so output is bit-identical for any thread
+  count.
+
+On the real backbone it takes 11 s on one thread and 4.7 s on four,
+versus igraph's 103 s. Layout quality matches igraph's on the tests.
+
+It's plain C11 + pthreads with no dependencies. Python compiles it on first
+use with the system `cc` (cached in `~/.cache/netmap`, `-march=native` when
+supported) and loads it via ctypes. Without a compiler it falls back to
+igraph (`--cyber lgl-igraph` forces that). `NETMAP_THREADS` sets the thread
+count and `NETMAP_LGL_PROFILE=1` prints a timing breakdown. `make
+netmap-lgl.mjs` in that directory builds a threaded WASM+SIMD module with
+emscripten, for in-browser layout later (not yet wired up).
 
 The cyber layout runs LGL on a **backbone**: each AS's primary
 (largest-cone) provider link, plus the mesh among core ASes. Every link is

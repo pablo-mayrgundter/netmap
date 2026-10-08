@@ -210,7 +210,8 @@ def main(argv=None):
     b.add_argument("--as2org", help="local CAIDA as-org2info file")
     b.add_argument("--date", help="CAIDA snapshot YYYYMMDD (default latest)")
     b.add_argument("--geo", default="dbip-city", choices=["dbip-city", "geolite2-city"])
-    b.add_argument("--cyber", default="lgl", choices=["lgl", "drl", "fr"], help="graph layout algorithm")
+    b.add_argument("--cyber", default="lgl", choices=["lgl", "lgl-igraph", "drl", "fr"],
+                   help="graph layout: lgl = native parallel LGL (falls back to igraph's)")
     b.add_argument("--cyber-graph", default="backbone", choices=["backbone", "full"],
                    help="lay out the primary-provider tree + core (Opte look) or every link")
     b.add_argument("--pin-threshold", type=float, default=0.6,

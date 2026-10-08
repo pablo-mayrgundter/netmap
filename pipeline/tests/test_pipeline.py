@@ -262,3 +262,34 @@ def test_pops_reattach_links_and_build_core_routes():
     assert all(p.node[a] == p.node[b] for a, b in p.routes)
     merged = [p.share[k] for k in range(3) if p.city[k] == "London"][0]
     assert merged == pytest.approx(0.35)
+
+
+def test_native_lgl_deterministic_and_sane():
+    from netmap import native
+
+    try:
+        native.load()
+    except native.NativeUnavailable:
+        pytest.skip("no C compiler")
+    import random
+
+    random.seed(1)
+    g = ig.Graph.Tree(3000, 3)  # a tree with some shortcuts, like the AS backbone
+    g.add_edges([(random.randrange(3000), random.randrange(3000)) for _ in range(150)])
+    el = np.asarray(g.get_edgelist(), np.int32)
+    a = native.lgl(g.vcount(), el[:, 0], el[:, 1], root=0, seed=3, threads=1)
+    b = native.lgl(g.vcount(), el[:, 0], el[:, 1], root=0, seed=3, threads=4)
+    assert np.isfinite(a).all() and np.array_equal(a, b)
+
+    # Quality on par with igraph's LGL: mean link length relative to the
+    # mean distance between random pairs (lower = tighter neighbourhoods).
+    def ratio(xy):
+        d_edge = np.hypot(*(xy[el[:, 0]] - xy[el[:, 1]]).T).mean()
+        i, j = np.random.default_rng(0).integers(0, g.vcount(), (2, 5000))
+        return d_edge / np.hypot(*(xy[i] - xy[j]).T).mean()
+
+    ref = np.asarray(g.layout_lgl(root=0).coords)
+    assert ratio(a) < 1.25 * ratio(ref)
+    # Disconnected input is laid out rather than rejected.
+    c = native.lgl(4, np.array([0, 2], np.int32), np.array([1, 3], np.int32), root=0)
+    assert np.isfinite(c).all()
