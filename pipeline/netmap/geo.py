@@ -175,7 +175,7 @@ class AsProfile:
         return {int(a): i for i, a in enumerate(self.asns)}
 
 
-def profile_ases(pfx: PrefixTable, geo: GeoTable, top_sites: int = 5) -> AsProfile:
+def profile_ases(pfx: PrefixTable, geo: GeoTable, top_sites: int = 32) -> AsProfile:
     asns, a_idx = np.unique(pfx.asn, return_inverse=True)
     n = len(asns)
     size = (pfx.end - pfx.start + 1).astype(np.float64)

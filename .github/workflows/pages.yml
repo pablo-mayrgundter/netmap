@@ -10,7 +10,10 @@ on:
   workflow_dispatch:
     inputs:
       maxzoom:
-        description: "Pre-rendered raster tile depth"
+        description: "Raster tile depth for the full-link layers"
+        default: "4"
+      backbone_maxzoom:
+        description: "Raster tile depth for the backbone-only layers"
         default: "4"
   schedule:
     - cron: "17 6 3 * *" # monthly, after CAIDA's as-rel snapshot lands
@@ -25,7 +28,7 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -44,16 +47,34 @@ jobs:
       - run: pip install -e pipeline
       - name: Build CAIDA map bundle
         run: python -m netmap build --topology caida --name internet
+      # WebP is ~3x smaller than PNG; a z0-7 pyramid of all three layouts is ~600 MB (PNG
+      # would pass the 1 GB Pages limit) and takes about an hour to render.
       - name: Render raster tiles
         run: |
-          python -m netmap tiles web/public/data/internet --maxzoom ${{ inputs.maxzoom || '4' }}
-          python -m netmap tiles web/public/data/internet --maxzoom ${{ inputs.maxzoom || '4' }} --backbone
+          python -m netmap tiles web/public/data/internet --format webp --maxzoom ${{ inputs.maxzoom || '4' }}
+          python -m netmap tiles web/public/data/internet --format webp --maxzoom ${{ inputs.backbone_maxzoom || '4' }} --backbone
+          du -sh web/public/data/internet/tiles/*
       - name: Build viewer
         working-directory: web
         run: npm ci && npm run build && touch dist/.nojekyll
-      - uses: JamesIves/github-pages-deploy-action@v4
-        with:
-          folder: web/dist
-          branch: gh-pages
-          clean-exclude: pr-preview/
-          force: false
+      # Publish as a single fresh commit so monthly refreshes of ~600 MB of
+      # tiles don't pile up in the branch's history. PR previews (pr-preview/,
+      # managed by preview.yml) are carried over from the current branch.
+      - name: Publish to gh-pages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          site="$PWD/web/dist"
+          # Blobless fetch: only pr-preview/'s files are downloaded, not the old tiles.
+          if git fetch --depth=1 --filter=blob:none origin gh-pages 2>/dev/null \
+             && [ -n "$(git ls-tree -d FETCH_HEAD pr-preview)" ]; then
+            git --work-tree="$site" checkout FETCH_HEAD -- pr-preview
+          fi
+          cd "$site"
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -qm "Deploy ${GITHUB_SHA::7} ($(date -u +%F))"
+          git push -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages

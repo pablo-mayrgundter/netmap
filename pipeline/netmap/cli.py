@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import asrel, export, geo, layout, metrics, sources, synthetic, tiles
+from . import asrel, export, geo, layout, metrics, pops, sources, synthetic, tiles
 from .regions import REGIONS, region_of
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -110,6 +110,14 @@ def cmd_build(args):
     plon, plat = geo_ll
     hyb = layout.hybrid(g, plat, plon, pinned, cyber, fr_iters=args.fr_iters,
                         local_shape=args.local_shape, seed=args.seed)
+    _step("points of presence for floating ASes")
+    sites_of = lambda i: prof.sites[rows[i]] if rows[i] >= 0 else []  # noqa: E731
+    pp = pops.build(topo.n, topo.src, topo.dst, np.flatnonzero(has_geo & ~pinned), sites_of,
+                    hyb[1], hyb[0])
+    pp_lon, pp_lat = layout.sunflower(pp.lon, pp.lat, m.level[pp.node].astype(float),
+                                      np.ones(pp.count, bool))
+    _step(f"  {pp.count} PoPs for {int((np.diff(pp.offset) > 0).sum())} ASes, "
+          f"{len(pp.routes)} core routes, {int((pp.edge_pop >= 0).any(1).sum())} links re-attached")
     # Nodes without geo sit at their hybrid position in geo mode (hidden there).
     geo_lon = np.where(has_geo, plon, hyb[0])
     geo_lat = np.where(has_geo, plat, hyb[1])
@@ -129,7 +137,9 @@ def cmd_build(args):
             "addrs": int(addrs[i]),
             "nprefix": int(prof.nprefix[ri]) if ri >= 0 else 0,
             "prefixes": pfx_lists.get(a, []),
-            "sites": prof.sites[ri] if ri >= 0 else [],
+            "sites": prof.sites[ri][:5] if ri >= 0 else [],
+            "pops": [[pp.city[k], round(float(pp.share[k]), 3)]
+                     for k in range(pp.offset[i], pp.offset[i + 1])],
             "concentration": round(float(conc[i]), 3),
             "pinned": bool(pinned[i]),
             "degree": int(m.degree[i]),
@@ -147,7 +157,7 @@ def cmd_build(args):
         out, name=args.name, topo=topo, metrics=m, prof_rows=rows,
         layouts={"cyber": cyber, "geo": (geo_lon, geo_lat), "hybrid": hyb},
         region_idx=region_idx, has_geo=has_geo, pinned=pinned, names=names, backbone=bmask,
-        sample_rank=srank,
+        sample_rank=srank, pops=(pp, pp_lon, pp_lat),
         info_records=info, attribution=attribution,
     )
     _update_index(Path(args.out))
@@ -171,7 +181,8 @@ def cmd_tiles(args):
     bundle = Path(args.bundle)
     for mode in args.modes.split(","):
         _step(f"rendering {mode} tiles to z{args.maxzoom}")
-        tiles.pyramid(bundle, bundle / "tiles", mode, args.maxzoom, backbone_only=args.backbone)
+        tiles.pyramid(bundle, bundle / "tiles", mode, args.maxzoom, backbone_only=args.backbone,
+                      fmt=args.format)
     _update_index(bundle.parent)
 
 
@@ -220,6 +231,8 @@ def main(argv=None):
     t.add_argument("bundle")
     t.add_argument("--modes", default="cyber,hybrid,geo")
     t.add_argument("--maxzoom", type=int, default=5)
+    t.add_argument("--format", default="png", choices=["png", "webp"],
+                   help="webp is ~3x smaller (lossy q80); png is lossless")
     t.add_argument("--backbone", action="store_true",
                    help="draw only backbone links (tiles/backbone/<mode>/...)")
     t.set_defaults(fn=cmd_tiles)

@@ -43,6 +43,7 @@ const state = {
   showTransit: true,
   showPeering: true,
   backboneOnly: hash.get('backbone') === '1',
+  pops: hash.get('pops') !== '0', // floating ASes drawn at their points of presence
   sampling: hash.has('sample') ? Number(hash.get('sample')) : 1, // 0..1 slider position
   glow: true,
   selected: null, // node index
@@ -145,7 +146,7 @@ function updateRaster() {
   const tm = tilesMeta[layer] || {};
   map.addSource('net', {
     type: 'raster',
-    tiles: [`${base}/${layer}/{z}/{x}/{y}.png`],
+    tiles: [`${base}/${layer}/{z}/{x}/{y}.${tm.format || 'png'}`],
     tileSize: 256,
     minzoom: 0,
     maxzoom: TILE_SERVER ? 14 : tm.maxzoom ?? 5,
@@ -178,22 +179,24 @@ function buildColours() {
 // saturate an 8-bit framebuffer and metro-scale structure stays visible.
 const lengthFactor = {};
 function edgeLengthFactor(mode) {
-  if (lengthFactor[mode]) return lengthFactor[mode];
-  const p = G[`pos_${mode}`];
+  const key = `${mode}|${usePops()}`;
+  if (lengthFactor[key]) return lengthFactor[key];
   const merc = (lon, lat) => {
     const s = Math.sin((Math.max(-85, Math.min(85, lat)) * Math.PI) / 180);
     return [(lon + 180) / 360, 0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)];
   };
   const f = new Float32Array(G.e);
+  const ta = [0, 0, 0];
+  const tb = [0, 0, 0];
   for (let k = 0; k < G.e; k++) {
-    const a = G.edges[2 * k];
-    const b = G.edges[2 * k + 1];
-    const [x0, y0] = merc(p[2 * a], p[2 * a + 1]);
-    const [x1, y1] = merc(p[2 * b], p[2 * b + 1]);
+    endPos(k, 0, ta, mode);
+    endPos(k, 1, tb, mode);
+    const [x0, y0] = merc(ta[0], ta[1]);
+    const [x1, y1] = merc(tb[0], tb[1]);
     const len = Math.hypot(x1 - x0, y1 - y0);
     f[k] = Math.min(1, Math.pow(0.004 / Math.max(len, 1e-7), 0.6));
   }
-  return (lengthFactor[mode] = f);
+  return (lengthFactor[key] = f);
 }
 
 // --- positions -----------------------------------------------------------
@@ -207,12 +210,34 @@ function altitude(i) {
   return Math.pow(l, 1.8) * ALT_MAX_M * state.altitude * 2;
 }
 
-function pos(i, target) {
-  const p = G[`pos_${state.mode}`];
+function pos(i, target, mode = state.mode) {
+  const p = G[`pos_${mode}`];
   target[0] = p[2 * i];
   target[1] = p[2 * i + 1];
   target[2] = altitude(i);
   return target;
+}
+
+// Points of presence (pipeline/netmap/pops.py): floating ASes split into the
+// cities their address space lives in. Each link end may attach to a PoP
+// instead of the AS's single position, and each PoP'd AS has core routes
+// (a spanning tree) between its PoPs.
+const usePops = (mode = state.mode) => state.pops && mode !== 'cyber' && !!G?.pop_pos;
+const hasPops = (i) => !!G.pop_offset && G.pop_offset[i + 1] > G.pop_offset[i];
+
+function popPos(p, target) {
+  target[0] = G.pop_pos[2 * p];
+  target[1] = G.pop_pos[2 * p + 1];
+  target[2] = altitude(G.pop_node[p]);
+  return target;
+}
+
+function endPos(k, side, target, mode = state.mode) {
+  if (usePops(mode)) {
+    const p = G.edge_pop[2 * k + side];
+    if (p >= 0) return popPos(p, target);
+  }
+  return pos(G.edges[2 * k + side], target, mode);
 }
 
 // --- layers --------------------------------------------------------------
@@ -291,8 +316,8 @@ const TRANSITION = { duration: 1400, easing: (t) => t * t * (3 - 2 * t) };
 
 function networkLayers(globeView) {
   if (!G) return [];
-  const trig = `${state.mode}|${state.view}|${state.altitude}`;
-  const colourTrig = `${state.mode}|${state.showTransit}|${state.showPeering}|${state.backboneOnly}`;
+  const trig = `${state.mode}|${state.view}|${state.altitude}|${usePops()}`;
+  const colourTrig = `${state.mode}|${state.showTransit}|${state.showPeering}|${state.backboneOnly}|${usePops()}`;
   const opacity = edgeOpacity(globeView);
   const lf = edgeLengthFactor(state.mode);
   const getEdgeColor = (_, { index, target }) => {
@@ -304,8 +329,8 @@ function networkLayers(globeView) {
     return target;
   };
   const edgeData = { length: G.e };
-  const src = (_, { index, target }) => pos(G.edges[2 * index], target);
-  const dst = (_, { index, target }) => pos(G.edges[2 * index + 1], target);
+  const src = (_, { index, target }) => endPos(index, 0, target);
+  const dst = (_, { index, target }) => endPos(index, 1, target);
   const layers = [];
   const showVectors = state.renderer === 'vector' || globeView;
 
@@ -355,16 +380,48 @@ function networkLayers(globeView) {
     }
   }
 
+  if (usePops() && showVectors && G.pop_routes) {
+    const routeData = { length: G.pop_routes.length / 2 };
+    const rsrc = (_, { index, target }) => popPos(G.pop_routes[2 * index], target);
+    const rdst = (_, { index, target }) => popPos(G.pop_routes[2 * index + 1], target);
+    const rcol = (_, { index, target }) => {
+      const o = G.pop_node[G.pop_routes[2 * index]] * 4;
+      target[0] = nodeColor[o];
+      target[1] = nodeColor[o + 1];
+      target[2] = nodeColor[o + 2];
+      target[3] = 255;
+      return target;
+    };
+    const routeOpacity = Math.min(0.9, opacity * 6);
+    const common = {
+      id: 'routes',
+      data: routeData,
+      getSourcePosition: rsrc,
+      getTargetPosition: rdst,
+      opacity: routeOpacity,
+      getWidth: 1.2,
+      widthUnits: 'pixels',
+      parameters: blendParams(globeView),
+      updateTriggers: { getSourcePosition: trig, getTargetPosition: trig },
+    };
+    layers.push(
+      globeView
+        ? new ArcLayer({ ...common, getSourceColor: rcol, getTargetColor: rcol, getHeight: 0.12, greatCircle: true, numSegments: 32 })
+        : new LineLayer({ ...common, getColor: rcol }),
+    );
+  }
+
   // Selection: the selected AS's links, bright.
   if (state.selected !== null) {
     const nb = G.neighbours(state.selected);
+    const sideOf = (d) => (G.edges[2 * d.edge] === state.selected ? 0 : 1);
     const LinkLayer = globeView ? ArcLayer : LineLayer;
     layers.push(
       new LinkLayer({
         id: 'sel-edges',
         data: nb,
-        getSourcePosition: (d, { target }) => pos(state.selected, target),
-        getTargetPosition: (d, { target }) => pos(d.node, target),
+        getSourcePosition: (d, { target }) => endPos(d.edge, sideOf(d), target),
+        getTargetPosition: (d, { target }) => endPos(d.edge, 1 - sideOf(d), target),
         getColor: (d) => (G.edge_rel[d.edge] === -1 ? [255, 255, 255, 200] : [140, 220, 255, 150]),
         getSourceColor: [255, 255, 255, 220],
         getTargetColor: (d) => (G.edge_rel[d.edge] === -1 ? [255, 255, 255, 160] : [140, 220, 255, 120]),
@@ -378,6 +435,7 @@ function networkLayers(globeView) {
     );
   }
 
+  const pops = usePops();
   const z = globeView ? globeZoom + 0.6 : map.getZoom();
   const sizeK = (0.25 + state.nodeSize * 2.2) * Math.min(1.6, 0.45 + 0.13 * z);
   const nodeOpacity = Math.min(0.9, 0.1 * Math.pow(2, z - 1) * (state.glow ? 1 : 2.5));
@@ -386,7 +444,7 @@ function networkLayers(globeView) {
       id: 'nodes',
       data: { length: G.n },
       getPosition: (_, { index, target }) => pos(index, target),
-      getRadius: (_, { index }) => (visibleNode(index) ? 0.6 + Math.log2(G.degree[index] + 1) * 0.55 : 0),
+      getRadius: (_, { index }) => (visibleNode(index) && !(pops && hasPops(index)) ? 0.6 + Math.log2(G.degree[index] + 1) * 0.55 : 0),
       getFillColor: (_, { index, target }) => {
         const o = index * 4;
         target[0] = nodeColor[o];
@@ -403,10 +461,41 @@ function networkLayers(globeView) {
       autoHighlight: true,
       highlightColor: [255, 255, 255, 255],
       parameters: blendParams(globeView),
-      updateTriggers: { getPosition: trig, getRadius: state.mode, getFillColor: `${showVectors}` },
+      updateTriggers: { getPosition: trig, getRadius: `${state.mode}|${pops}`, getFillColor: `${showVectors}` },
       transitions: { getPosition: TRANSITION },
     }),
   );
+
+  if (pops) {
+    layers.push(
+      new ScatterplotLayer({
+        id: 'pops',
+        data: { length: G.pop_node.length },
+        getPosition: (_, { index, target }) => popPos(index, target),
+        getRadius: (_, { index }) => {
+          const i = G.pop_node[index];
+          const w = Math.sqrt(G.pop_offset[i + 1] - G.pop_offset[i]);
+          return 0.8 + (Math.log2(G.degree[i] + 1) * 0.55) / w;
+        },
+        getFillColor: (_, { index, target }) => {
+          const o = G.pop_node[index] * 4;
+          target[0] = nodeColor[o];
+          target[1] = nodeColor[o + 1];
+          target[2] = nodeColor[o + 2];
+          target[3] = showVectors ? 255 : 0;
+          return target;
+        },
+        radiusUnits: 'pixels',
+        radiusScale: sizeK,
+        opacity: Math.min(1, nodeOpacity * 1.5),
+        pickable: true,
+        autoHighlight: true,
+        highlightColor: [255, 255, 255, 255],
+        parameters: blendParams(globeView),
+        updateTriggers: { getPosition: trig, getFillColor: `${showVectors}` },
+      }),
+    );
+  }
 
   if (state.selected !== null) {
     layers.push(
@@ -466,10 +555,18 @@ function render() {
 
 // --- interaction ---------------------------------------------------------
 
+function pickedNode(info) {
+  if (info.index < 0 || !info.layer) return null;
+  if (info.layer.id === 'nodes') return info.index;
+  if (info.layer.id === 'pops') return G.pop_node[info.index];
+  return null;
+}
+
 function onHover(info) {
   const tip = $('tooltip');
-  if (info.layer?.id === 'nodes' && info.index >= 0) {
-    const i = info.index;
+  const picked = pickedNode(info);
+  if (picked !== null) {
+    const i = picked;
     tip.hidden = false;
     tip.textContent = `AS${G.asn[i]} · ${G.names[i]} · ${G.degree[i]} links`;
     tip.style.left = `${info.x + 12}px`;
@@ -480,7 +577,8 @@ function onHover(info) {
 }
 
 function onClick(info) {
-  if (info.layer?.id === 'nodes' && info.index >= 0) select(info.index, false);
+  const picked = pickedNode(info);
+  if (picked !== null) select(picked, false);
   else if (!info.layer) select(null);
 }
 
@@ -636,6 +734,7 @@ function writeHash() {
   h.set('view', state.view);
   h.set('basemap', state.basemap);
   if (state.backboneOnly) h.set('backbone', '1');
+  if (!state.pops) h.set('pops', '0');
   if (state.sampling < 1) h.set('sample', state.sampling.toFixed(2));
   const c = map.getCenter();
   h.set('lon', c.lng.toFixed(3));
@@ -681,7 +780,7 @@ function wireControls() {
   slider('altitude', 'altitude');
   $('sampling').value = Math.round(state.sampling * 100);
   slider('sampling', 'sampling');
-  for (const [id, key] of [['showTransit', 'showTransit'], ['showPeering', 'showPeering'], ['glow', 'glow'], ['backboneOnly', 'backboneOnly']]) {
+  for (const [id, key] of [['showTransit', 'showTransit'], ['showPeering', 'showPeering'], ['glow', 'glow'], ['backboneOnly', 'backboneOnly'], ['pops', 'pops']]) {
     $(id).checked = state[key];
     $(id).addEventListener('change', (e) => {
       state[key] = e.target.checked;

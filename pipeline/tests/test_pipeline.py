@@ -232,3 +232,33 @@ def test_sample_rank_sweeps_from_tree_to_full():
     assert all(a <= b for a, b in zip(counts, counts[1:]))
     sub = ig.Graph(n=g.vcount(), edges=el[r == 0].tolist())
     assert sub.is_connected()
+
+
+def test_pops_reattach_links_and_build_core_routes():
+    from netmap import pops
+
+    # Node 0: a transit network with sites in New York, London and Tokyo
+    # (plus a suburb of London that should merge). Nodes 1-3 are pinned
+    # customers in those cities; node 4 is another PoP'd network in London
+    # and Tokyo.
+    sites = {
+        0: [(40.7, -74.0, 0.5, "New York"), (51.5, -0.1, 0.3, "London"),
+            (51.6, -0.3, 0.05, "Watford"), (35.7, 139.7, 0.15, "Tokyo")],
+        4: [(51.5, -0.1, 0.6, "London"), (35.7, 139.7, 0.4, "Tokyo")],
+    }
+    lat = np.array([20.0, 40.7, 51.5, 35.7, 45.0])
+    lon = np.array([-30.0, -74.0, -0.1, 139.7, 60.0])
+    src = np.array([0, 0, 0, 0])
+    dst = np.array([1, 2, 3, 4])
+    p = pops.build(5, src, dst, [0, 4], lambda i: sites.get(i, []), lat, lon)
+    assert p.count == 5 and list(np.diff(p.offset)) == [3, 0, 0, 0, 2]
+    city = lambda k: p.city[k]  # noqa: E731
+    assert [city(p.edge_pop[k, 0]) for k in range(3)] == ["New York", "London", "Tokyo"]
+    assert (p.edge_pop[:3, 1] == -1).all()
+    # 0 and 4 interconnect where both are (London or Tokyo), not mid-ocean.
+    assert city(p.edge_pop[3, 0]) == city(p.edge_pop[3, 1])
+    # MST: 2 routes for node 0's three PoPs, 1 for node 4's two.
+    assert len(p.routes) == 3
+    assert all(p.node[a] == p.node[b] for a, b in p.routes)
+    merged = [p.share[k] for k in range(3) if p.city[k] == "London"][0]
+    assert merged == pytest.approx(0.35)
