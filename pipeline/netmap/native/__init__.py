@@ -23,7 +23,7 @@ from pathlib import Path
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
-SOURCES = [HERE / "lgl.c", HERE / "paths.c"]
+SOURCES = [HERE / "lgl.c", HERE / "paths.c", HERE / "splat.c"]
 HEADERS = [HERE / "pool.h"]
 BASE_FLAGS = ["-O3", "-std=gnu11", "-ffast-math", "-fopenmp-simd", "-fPIC", "-shared", "-pthread"]
 ERRORS = {1: "out of memory", 2: "invalid arguments"}
@@ -103,6 +103,12 @@ def load():
         ctypes.POINTER(ctypes.c_int32), ctypes.c_int32, ctypes.c_int32,
         ctypes.POINTER(ctypes.c_int32),
     ]
+    f32p = ctypes.POINTER(ctypes.c_float)
+    lib.netmap_splat_lines.restype = None
+    lib.netmap_splat_lines.argtypes = [
+        ctypes.c_int64, f32p, f32p, f32p, f32p, f32p,
+        ctypes.c_float, ctypes.c_int64, ctypes.c_uint64, ctypes.c_int32, ctypes.c_int32, f32p,
+    ]
     _lib = lib
     return lib
 
@@ -160,3 +166,25 @@ def sample_rank(n: int, src, dst, roots, weights=None, threads: int | None = Non
     if rc != 0:
         raise RuntimeError(f"netmap_sample_rank failed: {ERRORS.get(rc, rc)}")
     return rank
+
+
+def available() -> bool:
+    try:
+        load()
+        return True
+    except NativeUnavailable:
+        return False
+
+
+def splat_lines(x0, y0, x1, y1, rgbw, acc, spacing: float, max_samples: int, seed: int) -> None:
+    """Accumulate jittered, bilinear line samples into acc (float32 [3, h, w])."""
+    lib = load()
+    f32p = ctypes.POINTER(ctypes.c_float)
+    arrs = [np.ascontiguousarray(a, dtype=np.float32) for a in (x0, y0, x1, y1)]
+    c = np.ascontiguousarray(rgbw, dtype=np.float32)
+    assert acc.dtype == np.float32 and acc.flags.c_contiguous and acc.ndim == 3
+    lib.netmap_splat_lines(
+        len(arrs[0]), *(a.ctypes.data_as(f32p) for a in arrs), c.ctypes.data_as(f32p),
+        spacing, int(max_samples), seed & (2**64 - 1), acc.shape[2], acc.shape[1],
+        acc.ctypes.data_as(f32p),
+    )

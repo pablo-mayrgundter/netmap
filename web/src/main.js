@@ -354,11 +354,13 @@ function computeFibers() {
   };
   const a = [0, 0, 0];
   const b = [0, 0, 0];
+  const lf = edgeLengthFactor(state.mode);
   const index = new Map();
   const edgeBundle = new Int32Array(G.e).fill(-1);
   // per-bundle accumulators (grown as needed)
   let cap = 1 << 16;
-  let acc = new Float64Array(cap * 12); // ax ay az bx by bz r g bl count transit peering
+  const NF = 13;
+  let acc = new Float64Array(cap * NF); // ax ay az bx by bz r g b count transit peering inkSum
   let nb = 0;
   for (let k = 0; k < G.e; k++) {
     if (G.edge_rank && G.edge_rank[k] > K) continue;
@@ -377,30 +379,31 @@ function computeFibers() {
       bi = nb++;
       index.set(pk, bi);
       if (nb > cap) {
-        const grown = new Float64Array(cap * 2 * 12);
+        const grown = new Float64Array(cap * 2 * NF);
         grown.set(acc);
         acc = grown;
         cap *= 2;
       }
     }
-    const o = bi * 12;
+    const o = bi * NF;
     const [sx, sy, sz, tx, ty, tz] = swap ? [xb, yb, b[2], xa, ya, a[2]] : [xa, ya, a[2], xb, yb, b[2]];
     acc[o] += sx, acc[o + 1] += sy, acc[o + 2] += sz;
     acc[o + 3] += tx, acc[o + 4] += ty, acc[o + 5] += tz;
     acc[o + 6] += edgeColor[k * 4], acc[o + 7] += edgeColor[k * 4 + 1], acc[o + 8] += edgeColor[k * 4 + 2];
     acc[o + 9] += 1;
     acc[o + (G.edge_rel[k] === -1 ? 10 : 11)] += 1;
+    acc[o + 12] += (edgeColor[k * 4 + 3] / 255) * lf[k]; // the link's own brightness
     edgeBundle[k] = bi;
   }
   // keep bundles with enough members, biggest last (drawn on top)
   const keep = [];
-  for (let i = 0; i < nb; i++) if (acc[i * 12 + 9] >= FIBER_MIN) keep.push(i);
-  keep.sort((x, y) => acc[x * 12 + 9] - acc[y * 12 + 9]);
+  for (let i = 0; i < nb; i++) if (acc[i * NF + 9] >= FIBER_MIN) keep.push(i);
+  keep.sort((x, y) => acc[x * NF + 9] - acc[y * NF + 9]);
   const remap = new Int32Array(nb).fill(-1);
   keep.forEach((bi, j) => (remap[bi] = j));
   const toLonLat = (x, y) => [x * 360 - 180, (Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180) / Math.PI];
   const fibers = keep.map((bi) => {
-    const o = bi * 12;
+    const o = bi * NF;
     const c = acc[o + 9];
     const [slon, slat] = toLonLat(acc[o] / c, acc[o + 1] / c);
     const [tlon, tlat] = toLonLat(acc[o + 3] / c, acc[o + 4] / c);
@@ -411,6 +414,7 @@ function computeFibers() {
       count: c,
       transit: acc[o + 10],
       peering: acc[o + 11],
+      ink: acc[o + 12], // sum of member brightness, conserved by the fiber
     };
   });
   const hidden = new Uint8Array(G.e);
@@ -429,19 +433,23 @@ function fiberLayers(globeView, opacity) {
   const { fibers } = computeFibers();
   if (!fibers.length) return [];
   const w = (f) => 1 + Math.log2(1 + f.count) * (0.4 + 2.4 * state.fiberWidth);
-  const col = (alpha) => (f) => [f.color[0], f.color[1], f.color[2], alpha];
-  const fOpacity = Math.min(1, 0.35 + opacity * 3);
-  const make = (id, width, alpha, pickable) => {
+  // Ink: brightness x width follows what the hidden member links added (x2,
+  // so fibers stand out over the unbundled links), with the same
+  // zoom-dependent opacity as links.
+  const alpha = (f, k) => Math.max(8, Math.min(255, (255 * k * f.ink) / w(f)));
+  const col = (k) => (f) => [f.color[0], f.color[1], f.color[2], alpha(f, k)];
+  const fOpacity = Math.min(1, opacity * 1.5);
+  const make = (id, width, k, pickable) => {
     if (globeView) {
-      const data = buildArcs(fibers.length, (k, a, b) => {
-        a[0] = fibers[k].source[0], a[1] = fibers[k].source[1], a[2] = fibers[k].source[2];
-        b[0] = fibers[k].target[0], b[1] = fibers[k].target[1], b[2] = fibers[k].target[2];
+      const data = buildArcs(fibers.length, (i, a, b) => {
+        a[0] = fibers[i].source[0], a[1] = fibers[i].source[1], a[2] = fibers[i].source[2];
+        b[0] = fibers[i].target[0], b[1] = fibers[i].target[1], b[2] = fibers[i].target[2];
       }, 0.04);
       return new PathLayer({
         id,
         data,
         _pathType: 'open',
-        getColor: (_, { index }) => col(alpha)(fibers[index]),
+        getColor: (_, { index }) => col(k)(fibers[index]),
         getWidth: (_, { index }) => width(fibers[index]),
         widthUnits: 'pixels',
         billboard: true,
@@ -455,16 +463,17 @@ function fiberLayers(globeView, opacity) {
       data: fibers,
       getSourcePosition: (f) => f.source,
       getTargetPosition: (f) => f.target,
-      getColor: col(alpha),
+      getColor: col(k),
       getWidth: width,
       widthUnits: 'pixels',
       opacity: fOpacity,
       pickable,
       parameters: blendParams(false),
+      updateTriggers: { getColor: fiberCache.key, getWidth: `${fiberCache.key}|${state.fiberWidth}` },
     });
   };
-  // soft glow under a bright core
-  return [make('fibers-glow', (f) => w(f) * 3, 40, false), make('fibers', w, 190, true)];
+  // a faint halo under a core that carries most of the ink
+  return [make('fibers-glow', (f) => w(f) * 2.5, 0.2, false), make('fibers', w, 2.0, true)];
 }
 
 // --- layers --------------------------------------------------------------
@@ -556,7 +565,8 @@ function networkLayers(globeView) {
     target[0] = edgeColor[o];
     target[1] = edgeColor[o + 1];
     target[2] = edgeColor[o + 2];
-    target[3] = edgeVisible(index) && !(hidden && hidden[index]) ? edgeColor[o + 3] * lf[index] : 0;
+    // with fibers on, links left out of any fiber recede so the bundles read
+    target[3] = edgeVisible(index) && !(hidden && hidden[index]) ? edgeColor[o + 3] * lf[index] * (hidden ? 0.5 : 1) : 0;
     return target;
   };
   const edgeData = { length: G.e };

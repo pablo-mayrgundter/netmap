@@ -29,6 +29,7 @@ import numpy as np
 from PIL import Image
 from scipy.ndimage import gaussian_filter
 
+from . import native
 from .export import read_bundle
 from .layout import lonlat_to_merc
 
@@ -136,6 +137,20 @@ class Scene:
         return np.flatnonzero(m)
 
 
+_NATIVE = None
+
+
+def _native_splat() -> bool:
+    """Use the C splatter (netmap/native/splat.c) when it compiles; set
+    NETMAP_NATIVE_SPLAT=0 to force the numpy path."""
+    global _NATIVE
+    if _NATIVE is None:
+        import os
+
+        _NATIVE = os.environ.get("NETMAP_NATIVE_SPLAT", "1") != "0" and native.available()
+    return _NATIVE
+
+
 def _clip(x0, y0, x1, y1, lo, hi):
     """Liang-Barsky clip of many segments to the square [lo, hi]^2."""
     dx, dy = x1 - x0, y1 - y0
@@ -184,21 +199,28 @@ def render(scene: Scene, z: int, tx: int, ty: int, edges=None, style: dict | Non
         y1 = scene.ey1[idx] * scale - ty * TILE
         ok, x0, y0, x1, y1 = _clip(x0, y0, x1, y1, -1.0, TILE + 1.0)
         x0, y0, x1, y1, sel = x0[ok], y0[ok], x1[ok], y1[ok], idx[ok]
-        length = np.hypot(x1 - x0, y1 - y0)
-        ns = np.maximum(np.ceil(length / st["spacing"]).astype(np.int64), 1)
-        if ns.sum() > st["max_samples"]:  # pathological tile: thin samples
-            ns = np.maximum((ns * st["max_samples"] / ns.sum()).astype(np.int64), 1)
-        rep = np.repeat(np.arange(len(ns)), ns)
-        starts = np.repeat(np.cumsum(ns) - ns, ns)
-        # Jittered (stratified) samples: thinned long edges then read as
-        # smooth haze instead of moire. Seeded per tile, so output is stable.
-        rng = np.random.default_rng((z << 48) ^ (tx << 24) ^ ty)
-        t = (np.arange(len(rep)) - starts + rng.random(len(rep))) / ns[rep]
-        px = x0[rep] + t * (x1 - x0)[rep]
-        py = y0[rep] + t * (y1 - y0)[rep]
-        # Per-sample weight: edge intensity times pixel length per sample.
-        wlen = (length / ns)[rep] * scene.ew[sel][rep]
-        _splat(acc, px, py, scene.ecol[sel][rep] * wlen[:, None])
+        seed = (z << 48) ^ (tx << 24) ^ ty
+        if _native_splat():
+            acc32 = np.zeros((3, TILE, TILE), np.float32)
+            native.splat_lines(x0, y0, x1, y1, scene.ecol[sel] * scene.ew[sel][:, None], acc32,
+                               st["spacing"], st["max_samples"], seed)
+            acc += acc32
+        else:
+            length = np.hypot(x1 - x0, y1 - y0)
+            ns = np.maximum(np.ceil(length / st["spacing"]).astype(np.int64), 1)
+            if ns.sum() > st["max_samples"]:  # pathological tile: thin samples
+                ns = np.maximum((ns * st["max_samples"] / ns.sum()).astype(np.int64), 1)
+            rep = np.repeat(np.arange(len(ns)), ns)
+            starts = np.repeat(np.cumsum(ns) - ns, ns)
+            # Jittered (stratified) samples: thinned long edges then read as
+            # smooth haze instead of moire. Seeded per tile, so output is stable.
+            rng = np.random.default_rng(seed)
+            t = (np.arange(len(rep)) - starts + rng.random(len(rep))) / ns[rep]
+            px = x0[rep] + t * (x1 - x0)[rep]
+            py = y0[rep] + t * (y1 - y0)[rep]
+            # Per-sample weight: edge intensity times pixel length per sample.
+            wlen = (length / ns)[rep] * scene.ew[sel][rep]
+            _splat(acc, px, py, scene.ecol[sel][rep] * wlen[:, None])
 
     if st.get("raw"):
         return acc

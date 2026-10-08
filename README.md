@@ -57,13 +57,23 @@ runs on the GPU, so the slider is instant. *Backbone only* is a separate
 view: each AS's primary provider link plus the core mesh, which is what the
 cyber layout is computed from.
 
+**Fiber bundles.** Links whose two ends fall in the same pair of grid cells
+are merged into one fiber. This happens after PoP re-attachment and with the
+current filters and sampling applied. Each fiber runs between the centroids
+of its members' ends, its width is `log2(1 + links)`, and its brightness
+follows the light of the links it replaces. Member links are hidden. The
+*Bundle* slider sets the cell size from metro (about 5 km) to region (about
+650 km), and hovering a fiber shows its transit/peering counts. It works in
+cyber mode too, where it bundles links between nearby clusters.
+
 Keys: `1` cyber · `2` hybrid · `3` geo · `g` globe · `/` search · `Esc` deselect.
 The URL hash keeps mode, view, camera and selected AS, so links are shareable.
 
-A full CAIDA build (81k ASes, 657k links) takes about 35 s on a 4-core
-box. The cyber layout is 4–5 s of that, using the native parallel LGL below.
-Parsing DB-IP adds about 20 s the first time only. Raster tiles take
-0.05–0.2 s each.
+A full CAIDA build (81k ASes, 657k links) takes about 30 s on a 4-core
+box, and everything uses all cores by default (`NETMAP_THREADS` overrides).
+Parsing DB-IP adds about 20 s the first time only. Raster tiles render in a
+process pool with a C line splatter: a z0–5 layer takes about 16 s and z6–7
+about 90 s on 4 cores.
 
 **Native LGL** (`pipeline/netmap/native/lgl.c`) is a reimplementation of
 LGL (Adai et al. 2004) using igraph's scheme: BFS layers, placement around
@@ -81,6 +91,16 @@ throughput:
 
 On the real backbone it takes 11 s on one thread and 4.7 s on four,
 versus igraph's 103 s. Layout quality matches igraph's on the tests.
+
+The other native kernels, all in `pipeline/netmap/native/`:
+
+* `paths.c` builds the traceroute-style link sampling: shortest-path trees
+  from 255 vantage ASes, run in parallel. It's BFS, or Dijkstra when given
+  weights, and lowers ranks with an atomic min so results are deterministic.
+  It takes 0.25 s, versus about 8 s with igraph.
+* `splat.c` is the tile rasterizer's inner loop: jittered, bilinear line
+  samples splatted into a float accumulator in one pass. The heaviest tiles
+  render about 20× faster than with numpy.
 
 It's plain C11 + pthreads with no dependencies. Python compiles it on first
 use with the system `cc` (cached in `~/.cache/netmap`, `-march=native` when
