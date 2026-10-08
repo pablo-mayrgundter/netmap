@@ -24,7 +24,7 @@ DB-IP lite    ──►│  per-AS   │   tiles.py   XYZ PNG pyramid /      │
                  └───────────┴─────────────────────────────────────┘
                                                                           │
                       web/ (Vite, deck.gl + MapLibre) ◄───────────────────┘
-                      WebGL vectors or raster tiles · OSM / CARTO / none · 2D map or 3D globe
+                      WebGL vectors or raster tiles · dark grid / OSM / none · 2D map or 3D globe
 ```
 
 ## Quick start

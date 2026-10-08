@@ -16,15 +16,32 @@ const params = new URLSearchParams(location.search);
 const TILE_SERVER = params.get('tiles');
 
 const BASEMAPS = {
-  dark: {
-    tiles: ['a', 'b', 'c', 'd'].map((s) => `https://${s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png`),
-    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions">CARTO</a>',
-  },
   osm: {
     tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
     attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
   },
 };
+
+// The default basemap: a dark lat/lon graticule generated here, so there are
+// no tile requests, tokens or placeholder images. Every 10 degrees, brighter
+// every 30.
+const GRID_BG = '#04060b';
+const graticule = (() => {
+  const features = [];
+  const line = (coords, major) => features.push({ type: 'Feature', properties: { major }, geometry: { type: 'LineString', coordinates: coords } });
+  for (let lon = -180; lon <= 180; lon += 10) {
+    const pts = [];
+    for (let lat = -80; lat <= 80; lat += 2) pts.push([lon, lat]);
+    line(pts, lon % 30 === 0);
+  }
+  for (let lat = -80; lat <= 80; lat += 10) {
+    const pts = [];
+    for (let lon = -180; lon <= 180; lon += 2) pts.push([lon, lat]);
+    line(pts, lat % 30 === 0);
+  }
+  return { type: 'FeatureCollection', features };
+})();
+
 
 // Core networks hover this high (at full hierarchy level, default slider) on
 // the globe: high enough to read as a layer above the cities, low enough that
@@ -41,7 +58,7 @@ const hash = new URLSearchParams(location.hash.slice(1));
 const PARAMS = [
   ['mode', 'mode', ['cyber', 'hybrid', 'geo'], 'hybrid'],
   ['view', 'view', ['map', 'globe'], 'globe'],
-  ['basemap', 'basemap', ['dark', 'osm', 'none'], 'dark'],
+  ['basemap', 'basemap', ['grid', 'osm', 'none'], 'grid'],
   ['renderer', 'renderer', ['vector', 'raster'], 'vector'],
   ['edgeAlpha', 'edges', 'num', 0.05],
   ['nodeSize', 'nodes', 'num', 0],
@@ -126,11 +143,19 @@ function ensureGlobe() {
 }
 
 function baseStyle() {
+  const grid = state.basemap === 'grid';
   const style = {
     version: 8,
     sources: {},
-    layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#000' } }],
+    layers: [{ id: 'bg', type: 'background', paint: { 'background-color': grid ? GRID_BG : '#000' } }],
   };
+  if (grid) {
+    style.sources.grid = { type: 'geojson', data: graticule };
+    style.layers.push(
+      { id: 'grid-minor', type: 'line', source: 'grid', filter: ['!', ['get', 'major']], paint: { 'line-color': '#111827', 'line-width': 0.6 } },
+      { id: 'grid-major', type: 'line', source: 'grid', filter: ['get', 'major'], paint: { 'line-color': '#1b2538', 'line-width': 0.9 } },
+    );
+  }
   const b = BASEMAPS[state.basemap];
   if (b) {
     style.sources.base = { type: 'raster', tiles: b.tiles, tileSize: 256, attribution: b.attribution, maxzoom: 19 };
@@ -817,7 +842,7 @@ const earth = (() => {
       id: 'ocean',
       data: [{ polygon: [[-180, 90], [0, 90], [180, 90], [180, -90], [0, -90], [-180, -90]] }],
       getPolygon: (d) => d.polygon,
-      getFillColor: [6, 10, 22, 255],
+      getFillColor: [4, 6, 11, 255],
     }),
     new GeoJsonLayer({
       id: 'land',
@@ -827,6 +852,15 @@ const earth = (() => {
       getFillColor: [22, 28, 40, 255],
       getLineColor: [60, 72, 96, 255],
       lineWidthMinPixels: 0.5,
+    }),
+    new GeoJsonLayer({
+      id: 'grid',
+      data: graticule,
+      stroked: true,
+      filled: false,
+      getLineColor: (f) => (f.properties.major ? [36, 50, 74, 200] : [24, 32, 50, 170]),
+      lineWidthUnits: 'pixels',
+      getLineWidth: (f) => (f.properties.major ? 0.9 : 0.6),
     }),
   ];
 })();
