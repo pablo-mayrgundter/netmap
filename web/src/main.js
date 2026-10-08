@@ -34,24 +34,43 @@ const ALT_MAX_M = 700_000;
 // --- state ---------------------------------------------------------------
 
 const hash = new URLSearchParams(location.hash.slice(1));
+
+// Every UI parameter: state field, URL key, type, default. Permalinks carry
+// all of them (plus dataset, camera and selection), so a link reproduces the
+// view exactly even if these defaults change later.
+const PARAMS = [
+  ['mode', 'mode', ['cyber', 'hybrid', 'geo'], 'hybrid'],
+  ['view', 'view', ['map', 'globe'], 'globe'],
+  ['basemap', 'basemap', ['dark', 'osm', 'none'], 'dark'],
+  ['renderer', 'renderer', ['vector', 'raster'], 'vector'],
+  ['edgeAlpha', 'edges', 'num', 0.05],
+  ['nodeSize', 'nodes', 'num', 0],
+  ['sampling', 'sample', 'num', 0], // 0 = one vantage tree .. 1 = every link
+  ['altitude', 'alt', 'num', 0.2],
+  ['showTransit', 'transit', 'bool', true],
+  ['showPeering', 'peering', 'bool', true],
+  ['backboneOnly', 'backbone', 'bool', true],
+  ['pops', 'pops', 'bool', true], // floating ASes drawn at their points of presence
+  ['fibers', 'fibers', 'bool', true], // bundle links that join the same pair of places
+  ['fiberCell', 'cell', 'num', 1], // 0..1 -> ~5..650 km
+  ['fiberWidth', 'fw', 'num', 0.1],
+  ['glow', 'glow', 'bool', true],
+];
+
+function readParam([, key, type, def]) {
+  const v = hash.get(key);
+  if (v === null) return def;
+  if (type === 'bool') return v === '1' || v === 'true';
+  if (type === 'num') {
+    const x = Number(v);
+    return Number.isFinite(x) ? Math.min(1, Math.max(0, x)) : def;
+  }
+  return type.includes(v) ? v : def; // enumerated string
+}
+
 const state = {
   dataset: hash.get('data') || params.get('data') || null,
-  mode: hash.get('mode') || 'hybrid',
-  view: hash.get('view') || 'map',
-  basemap: hash.get('basemap') || 'dark',
-  renderer: 'vector',
-  edgeAlpha: 0.35,
-  nodeSize: 0.4,
-  altitude: 0.5,
-  showTransit: true,
-  showPeering: true,
-  backboneOnly: hash.get('backbone') === '1',
-  pops: hash.get('pops') !== '0', // floating ASes drawn at their points of presence
-  fibers: hash.get('fibers') === '1', // bundle links that join the same pair of places
-  fiberCell: hash.has('cell') ? Number(hash.get('cell')) : 0.5, // 0..1 -> ~5..650 km
-  fiberWidth: 0.5,
-  sampling: hash.has('sample') ? Number(hash.get('sample')) : 1, // 0..1 slider position
-  glow: true,
+  ...Object.fromEntries(PARAMS.map((p) => [p[0], readParam(p)])),
   selected: null, // node index
   hover: null,
 };
@@ -81,18 +100,21 @@ const overlay = new MapboxOverlay({ interleaved: false, layers: [], getTooltip: 
 map.addControl(overlay);
 
 let globe = null;
+let globeCam = null; // globe's current view state, for permalinks
 function ensureGlobe() {
   if (globe) return globe;
   const c = map.getCenter();
   globe = new Deck({
     parent: $('globe'),
     views: new GlobeView({ resolution: 5 }),
-    initialViewState: { longitude: c.lng, latitude: c.lat, zoom: (globeZoom = Math.max(map.getZoom() - 0.6, 0)) },
+    initialViewState: (globeCam = { longitude: c.lng, latitude: c.lat, zoom: (globeZoom = Math.max(map.getZoom() - 0.6, 0)) }),
     controller: true,
     layers: [],
     onHover: onHover,
     onClick: onClick,
     onViewStateChange: ({ viewState }) => {
+      globeCam = viewState;
+      writeHashSoon();
       if (Math.abs(viewState.zoom - globeZoom) > 0.05) {
         globeZoom = viewState.zoom;
         renderSoon();
@@ -878,6 +900,7 @@ function flyTo(i) {
   const lat = p[2 * i + 1];
   if (state.view === 'globe') {
     const vs = { longitude: lon, latitude: lat, zoom: 2.2, transitionDuration: 1200 };
+    globeCam = vs;
     ensureGlobe().setProps({ initialViewState: vs });
   } else {
     map.flyTo({ center: [lon, lat], zoom: Math.max(map.getZoom(), state.mode === 'cyber' ? 5 : 6), speed: 1.4 });
@@ -1011,20 +1034,41 @@ function syncControls() {
 function writeHash() {
   const h = new URLSearchParams();
   if (G) h.set('data', G.id);
-  h.set('mode', state.mode);
-  h.set('view', state.view);
-  h.set('basemap', state.basemap);
-  if (state.backboneOnly) h.set('backbone', '1');
-  if (!state.pops) h.set('pops', '0');
-  if (state.fibers) h.set('fibers', '1');
-  if (state.fibers) h.set('cell', state.fiberCell.toFixed(2));
-  if (state.sampling < 1) h.set('sample', state.sampling.toFixed(2));
-  const c = map.getCenter();
-  h.set('lon', c.lng.toFixed(3));
-  h.set('lat', c.lat.toFixed(3));
-  h.set('z', map.getZoom().toFixed(2));
+  for (const [field, key, type] of PARAMS) {
+    const v = state[field];
+    h.set(key, type === 'bool' ? (v ? '1' : '0') : type === 'num' ? String(+v.toFixed(2)) : v);
+  }
+  // camera: the globe's when it's showing (zoom stored in map units)
+  if (state.view === 'globe' && globeCam) {
+    h.set('lon', globeCam.longitude.toFixed(3));
+    h.set('lat', globeCam.latitude.toFixed(3));
+    h.set('z', (globeCam.zoom + 0.6).toFixed(2));
+  } else {
+    const c = map.getCenter();
+    h.set('lon', c.lng.toFixed(3));
+    h.set('lat', c.lat.toFixed(3));
+    h.set('z', map.getZoom().toFixed(2));
+  }
   if (state.selected !== null && G) h.set('as', G.asn[state.selected]);
   history.replaceState(null, '', `#${h}`);
+}
+
+let hashTimer = null;
+function writeHashSoon() {
+  clearTimeout(hashTimer);
+  hashTimer = setTimeout(writeHash, 250);
+}
+
+// Push state into every control (on load, and whenever state changes in code).
+function applyControls() {
+  for (const [field, , type] of PARAMS) {
+    const el = $(field);
+    if (!el) continue;
+    if (type === 'bool') el.checked = state[field];
+    else if (type === 'num') el.value = Math.round(state[field] * 100);
+    else if (el.tagName === 'SELECT') el.value = state[field];
+  }
+  syncControls();
 }
 
 function wireControls() {
@@ -1041,7 +1085,7 @@ function wireControls() {
     if (v === 'globe') {
       const c = map.getCenter();
       const zoom = Math.max(map.getZoom() - 0.6, 0);
-      ensureGlobe().setProps({ initialViewState: { longitude: c.lng, latitude: c.lat, zoom } });
+      ensureGlobe().setProps({ initialViewState: (globeCam = { longitude: c.lng, latitude: c.lat, zoom }) });
       globeZoom = zoom; // link opacity follows the globe's zoom; keep it in sync
     }
     state.view = v;
@@ -1124,6 +1168,7 @@ async function load(id) {
   const hasTiles = TILE_SERVER || Object.keys(tilesMeta).length > 0;
   $('renderer').querySelector('[value="raster"]').disabled = !hasTiles;
   if (!hasTiles) state.renderer = 'vector';
+  applyControls();
 
   const m = G.meta;
   $('banner').hidden = !m.synthetic;
@@ -1145,6 +1190,7 @@ async function load(id) {
 
 async function boot() {
   wireControls();
+  applyControls();
   wireSearch();
   const sets = await listDatasets(DATA_BASE);
   if (!sets.length) {

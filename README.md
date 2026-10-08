@@ -67,7 +67,11 @@ follows the light of the links it replaces. Member links are hidden. The
 cyber mode too, where it bundles links between nearby clusters.
 
 Keys: `1` cyber · `2` hybrid · `3` geo · `g` globe · `/` search · `Esc` deselect.
-The URL hash keeps mode, view, camera and selected AS, so links are shareable.
+The URL hash is a full permalink: every control (layout, view, basemap,
+renderer, sliders, toggles), the dataset, the camera (2D map or globe) and the
+selected AS. Opening a link restores the view exactly. Without a hash the
+viewer starts on the hybrid globe with backbone, points of presence and
+region-scale fiber bundles on.
 
 A full CAIDA build (81k ASes, 657k links) takes about 30 s on a 4-core
 box, and everything uses all cores by default (`NETMAP_THREADS` overrides).
