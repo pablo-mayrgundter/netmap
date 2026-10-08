@@ -1,0 +1,9 @@
+# raw downloads and parsed caches
+data/
+# generated map bundles and tile pyramids
+web/public/data/
+node_modules/
+web/dist/
+__pycache__/
+*.egg-info/
+.pytest_cache/

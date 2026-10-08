@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>netmap — maps of cyberspace</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <div id="map"></div>
+    <div id="globe" hidden></div>
+
+    <aside id="panel">
+      <header>
+        <h1>netmap</h1>
+        <span class="sub">maps of cyberspace</span>
+      </header>
+      <div id="banner" hidden></div>
+
+      <label class="row">
+        <span>Dataset</span>
+        <select id="dataset"></select>
+      </label>
+
+      <div class="group" role="radiogroup" aria-label="Layout">
+        <span class="label">Layout</span>
+        <div class="seg" id="mode">
+          <button data-v="cyber" title="Large Graph Layout: pure topology (1)">Cyber</button>
+          <button data-v="hybrid" title="Metro-concentrated ASes pinned, core placed by the graph (2)">Hybrid</button>
+          <button data-v="geo" title="Every geolocated AS at its main site (3)">Geo</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <span class="label">View</span>
+        <div class="seg" id="view">
+          <button data-v="map" title="2D slippy map">Map</button>
+          <button data-v="globe" title="3D globe, altitude = hierarchy (G)">Globe</button>
+        </div>
+      </div>
+
+      <label class="row">
+        <span>Basemap</span>
+        <select id="basemap">
+          <option value="dark">Dark (CARTO)</option>
+          <option value="osm">OpenStreetMap</option>
+          <option value="none">None (black)</option>
+        </select>
+      </label>
+
+      <label class="row">
+        <span>Renderer</span>
+        <select id="renderer">
+          <option value="vector">WebGL vectors</option>
+          <option value="raster">Raster tiles</option>
+        </select>
+      </label>
+
+      <details open>
+        <summary>Style</summary>
+        <label class="row"><span>Edges</span><input id="edgeAlpha" type="range" min="0" max="100" value="35" /></label>
+        <label class="row"><span>Nodes</span><input id="nodeSize" type="range" min="0" max="100" value="40" /></label>
+        <label class="row" title="Links seen by traceroute-style sampling: shortest-path trees from 1 (left: a single spanning tree, the Opte look) up to 255 vantage ASes, then every link (right)"><span>Sampling</span><input id="sampling" type="range" min="0" max="100" value="100" /></label>
+        <div class="hint" id="samplingLabel"></div>
+        <label class="row"><span>Altitude</span><input id="altitude" type="range" min="0" max="100" value="50" /></label>
+        <label class="check"><input id="showTransit" type="checkbox" checked /> transit links (provider→customer)</label>
+        <label class="check"><input id="showPeering" type="checkbox" checked /> peering links</label>
+        <label class="check" title="Each AS's primary provider link plus the core mesh: about one link per AS, like the traceroute trees of the Opte maps"><input id="backboneOnly" type="checkbox" /> backbone only (Opte-style)</label>
+        <label class="check"><input id="glow" type="checkbox" checked /> additive glow</label>
+      </details>
+
+      <div class="search">
+        <input id="search" type="search" placeholder="Find AS number or name…" autocomplete="off" />
+        <ul id="results"></ul>
+      </div>
+
+      <ul id="legend"></ul>
+      <p id="stats"></p>
+    </aside>
+
+    <aside id="info" hidden>
+      <button id="close" aria-label="Close">×</button>
+      <div id="infoBody"></div>
+    </aside>
+
+    <div id="tooltip" hidden></div>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>

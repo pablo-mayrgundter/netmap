@@ -1,0 +1,57 @@
+# Build the real map from the latest CAIDA snapshot and publish viewer + data +
+# raster tiles to the gh-pages branch (served by GitHub Pages at the site root).
+# PR previews (preview.yml) live under pr-preview/ on the same branch and are
+# left untouched here.
+name: pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      maxzoom:
+        description: "Pre-rendered raster tile depth"
+        default: "4"
+  schedule:
+    - cron: "17 6 3 * *" # monthly, after CAIDA's as-rel snapshot lands
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/cache@v4
+        with:
+          path: data/raw
+          key: raw-${{ github.run_id }}
+          restore-keys: raw-
+      - run: pip install -e pipeline
+      - name: Build CAIDA map bundle
+        run: python -m netmap build --topology caida --name internet
+      - name: Render raster tiles
+        run: python -m netmap tiles web/public/data/internet --maxzoom ${{ inputs.maxzoom || '4' }}
+      - name: Build viewer
+        working-directory: web
+        run: npm ci && npm run build && touch dist/.nojekyll
+      - uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: web/dist
+          branch: gh-pages
+          clean-exclude: pr-preview/
+          force: false
