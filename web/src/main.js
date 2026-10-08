@@ -47,6 +47,9 @@ const state = {
   showPeering: true,
   backboneOnly: hash.get('backbone') === '1',
   pops: hash.get('pops') !== '0', // floating ASes drawn at their points of presence
+  fibers: hash.get('fibers') === '1', // bundle links that join the same pair of places
+  fiberCell: hash.has('cell') ? Number(hash.get('cell')) : 0.5, // 0..1 -> ~5..650 km
+  fiberWidth: 0.5,
   sampling: hash.has('sample') ? Number(hash.get('sample')) : 1, // 0..1 slider position
   glow: true,
   selected: null, // node index
@@ -325,6 +328,145 @@ function cachedArcs(key, count, ends, liftK) {
   return arcCache.get(key);
 }
 
+// --- fiber bundles -------------------------------------------------------
+// Links whose two ends fall in the same pair of grid cells (after PoP
+// re-attachment and the current filters) are merged into one fiber between
+// the centroids of their ends, drawn with width ~ log2(1 + count). Members
+// are hidden under their fiber. The cell size is a slider: metro-to-metro at
+// small sizes, region-to-region at large ones. Works in cyber mode too, where
+// it bundles links between nearby clusters of the layout.
+const FIBER_MIN = 2; // links needed to form a fiber
+function fiberCellSize() {
+  return 1.25e-4 * Math.pow(128, state.fiberCell); // mercator units (1 = world)
+}
+
+let fiberCache = { key: null, value: null };
+function computeFibers() {
+  const K = sampleK();
+  const key = `${state.mode}|${usePops()}|${state.fiberCell}|${K}|${state.showTransit}|${state.showPeering}|${state.backboneOnly}|${state.view}|${state.altitude}`;
+  if (fiberCache.key === key) return fiberCache.value;
+  const cell = fiberCellSize();
+  const inv = 1 / cell;
+  const W = Math.ceil(inv) + 2; // cells per row; ids < 2^26 for cell >= 1.25e-4
+  const merc = (lon, lat) => {
+    const s = Math.sin((Math.max(-85, Math.min(85, lat)) * Math.PI) / 180);
+    return [(lon + 180) / 360, 0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)];
+  };
+  const a = [0, 0, 0];
+  const b = [0, 0, 0];
+  const index = new Map();
+  const edgeBundle = new Int32Array(G.e).fill(-1);
+  // per-bundle accumulators (grown as needed)
+  let cap = 1 << 16;
+  let acc = new Float64Array(cap * 12); // ax ay az bx by bz r g bl count transit peering
+  let nb = 0;
+  for (let k = 0; k < G.e; k++) {
+    if (G.edge_rank && G.edge_rank[k] > K) continue;
+    if (!edgeVisible(k)) continue;
+    endPos(k, 0, a);
+    endPos(k, 1, b);
+    const [xa, ya] = merc(a[0], a[1]);
+    const [xb, yb] = merc(b[0], b[1]);
+    const ca = Math.floor(ya * inv) * W + Math.floor(xa * inv);
+    const cb = Math.floor(yb * inv) * W + Math.floor(xb * inv);
+    if (ca === cb) continue; // local: stays a plain link
+    const swap = ca > cb;
+    const pk = (swap ? cb : ca) * 67108864 + (swap ? ca : cb);
+    let bi = index.get(pk);
+    if (bi === undefined) {
+      bi = nb++;
+      index.set(pk, bi);
+      if (nb > cap) {
+        const grown = new Float64Array(cap * 2 * 12);
+        grown.set(acc);
+        acc = grown;
+        cap *= 2;
+      }
+    }
+    const o = bi * 12;
+    const [sx, sy, sz, tx, ty, tz] = swap ? [xb, yb, b[2], xa, ya, a[2]] : [xa, ya, a[2], xb, yb, b[2]];
+    acc[o] += sx, acc[o + 1] += sy, acc[o + 2] += sz;
+    acc[o + 3] += tx, acc[o + 4] += ty, acc[o + 5] += tz;
+    acc[o + 6] += edgeColor[k * 4], acc[o + 7] += edgeColor[k * 4 + 1], acc[o + 8] += edgeColor[k * 4 + 2];
+    acc[o + 9] += 1;
+    acc[o + (G.edge_rel[k] === -1 ? 10 : 11)] += 1;
+    edgeBundle[k] = bi;
+  }
+  // keep bundles with enough members, biggest last (drawn on top)
+  const keep = [];
+  for (let i = 0; i < nb; i++) if (acc[i * 12 + 9] >= FIBER_MIN) keep.push(i);
+  keep.sort((x, y) => acc[x * 12 + 9] - acc[y * 12 + 9]);
+  const remap = new Int32Array(nb).fill(-1);
+  keep.forEach((bi, j) => (remap[bi] = j));
+  const toLonLat = (x, y) => [x * 360 - 180, (Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180) / Math.PI];
+  const fibers = keep.map((bi) => {
+    const o = bi * 12;
+    const c = acc[o + 9];
+    const [slon, slat] = toLonLat(acc[o] / c, acc[o + 1] / c);
+    const [tlon, tlat] = toLonLat(acc[o + 3] / c, acc[o + 4] / c);
+    return {
+      source: [slon, slat, acc[o + 2] / c],
+      target: [tlon, tlat, acc[o + 5] / c],
+      color: [acc[o + 6] / c, acc[o + 7] / c, acc[o + 8] / c],
+      count: c,
+      transit: acc[o + 10],
+      peering: acc[o + 11],
+    };
+  });
+  const hidden = new Uint8Array(G.e);
+  let bundled = 0;
+  for (let k = 0; k < G.e; k++) {
+    if (edgeBundle[k] >= 0 && remap[edgeBundle[k]] >= 0) {
+      hidden[k] = 1;
+      bundled++;
+    }
+  }
+  fiberCache = { key, value: { fibers, hidden, bundled } };
+  return fiberCache.value;
+}
+
+function fiberLayers(globeView, opacity) {
+  const { fibers } = computeFibers();
+  if (!fibers.length) return [];
+  const w = (f) => 1 + Math.log2(1 + f.count) * (0.4 + 2.4 * state.fiberWidth);
+  const col = (alpha) => (f) => [f.color[0], f.color[1], f.color[2], alpha];
+  const fOpacity = Math.min(1, 0.35 + opacity * 3);
+  const make = (id, width, alpha, pickable) => {
+    if (globeView) {
+      const data = buildArcs(fibers.length, (k, a, b) => {
+        a[0] = fibers[k].source[0], a[1] = fibers[k].source[1], a[2] = fibers[k].source[2];
+        b[0] = fibers[k].target[0], b[1] = fibers[k].target[1], b[2] = fibers[k].target[2];
+      }, 0.04);
+      return new PathLayer({
+        id,
+        data,
+        _pathType: 'open',
+        getColor: (_, { index }) => col(alpha)(fibers[index]),
+        getWidth: (_, { index }) => width(fibers[index]),
+        widthUnits: 'pixels',
+        billboard: true,
+        opacity: fOpacity,
+        pickable,
+        parameters: blendParams(true),
+      });
+    }
+    return new LineLayer({
+      id,
+      data: fibers,
+      getSourcePosition: (f) => f.source,
+      getTargetPosition: (f) => f.target,
+      getColor: col(alpha),
+      getWidth: width,
+      widthUnits: 'pixels',
+      opacity: fOpacity,
+      pickable,
+      parameters: blendParams(false),
+    });
+  };
+  // soft glow under a bright core
+  return [make('fibers-glow', (f) => w(f) * 3, 40, false), make('fibers', w, 190, true)];
+}
+
 // --- layers --------------------------------------------------------------
 
 const additive = {
@@ -399,18 +541,22 @@ function edgeVisible(k) {
 
 const TRANSITION = { duration: 1400, easing: (t) => t * t * (3 - 2 * t) };
 
+const showVectorsFor = (globeView) => state.renderer === 'vector' || globeView;
+
 function networkLayers(globeView) {
   if (!G) return [];
   const trig = `${state.mode}|${state.view}|${state.altitude}|${usePops()}`;
-  const colourTrig = `${state.mode}|${state.showTransit}|${state.showPeering}|${state.backboneOnly}|${usePops()}`;
   const opacity = edgeOpacity(globeView);
   const lf = edgeLengthFactor(state.mode);
+  const fib = state.fibers && showVectorsFor(globeView) ? computeFibers() : null;
+  const hidden = fib ? fib.hidden : null;
+  const colourTrig = `${state.mode}|${state.showTransit}|${state.showPeering}|${state.backboneOnly}|${usePops()}|${state.fibers ? fiberCache.key ?? 'f' : ''}`;
   const getEdgeColor = (_, { index, target }) => {
     const o = index * 4;
     target[0] = edgeColor[o];
     target[1] = edgeColor[o + 1];
     target[2] = edgeColor[o + 2];
-    target[3] = edgeVisible(index) ? edgeColor[o + 3] * lf[index] : 0;
+    target[3] = edgeVisible(index) && !(hidden && hidden[index]) ? edgeColor[o + 3] * lf[index] : 0;
     return target;
   };
   const edgeData = { length: G.e };
@@ -508,6 +654,8 @@ function networkLayers(globeView) {
       layers.push(new LineLayer({ ...common, getColor: rcol }));
     }
   }
+
+  if (fib) layers.push(...fiberLayers(globeView, opacity));
 
   // Selection: the selected AS's links, bright.
   if (state.selected !== null) {
@@ -684,6 +832,12 @@ function onHover(info) {
     tip.textContent = `AS${G.asn[i]} · ${G.names[i]} · ${G.degree[i]} links`;
     tip.style.left = `${info.x + 12}px`;
     tip.style.top = `${info.y + 12}px`;
+  } else if (info.layer?.id === 'fibers' && info.index >= 0) {
+    const f = computeFibers().fibers[info.index];
+    tip.hidden = false;
+    tip.textContent = `fiber: ${fmt(f.count)} links (${fmt(f.transit)} transit, ${fmt(f.peering)} peering)`;
+    tip.style.left = `${info.x + 12}px`;
+    tip.style.top = `${info.y + 12}px`;
   } else {
     tip.hidden = true;
   }
@@ -832,6 +986,10 @@ function wireSearch() {
 
 function syncControls() {
   $('samplingLabel').textContent = G ? samplingLabel() : '';
+  const fib = state.fibers && G && fiberCache.value;
+  $('fiberLabel').textContent = fib
+    ? `~${Math.round(fiberCellSize() * 40075)} km cells · ${fmt(fib.fibers.length)} fibers carrying ${fmt(fib.bundled)} links`
+    : '';
   for (const b of $('mode').children) b.classList.toggle('on', b.dataset.v === state.mode);
   for (const b of $('view').children) b.classList.toggle('on', b.dataset.v === state.view);
   $('basemap').value = state.basemap;
@@ -848,6 +1006,8 @@ function writeHash() {
   h.set('basemap', state.basemap);
   if (state.backboneOnly) h.set('backbone', '1');
   if (!state.pops) h.set('pops', '0');
+  if (state.fibers) h.set('fibers', '1');
+  if (state.fibers) h.set('cell', state.fiberCell.toFixed(2));
   if (state.sampling < 1) h.set('sample', state.sampling.toFixed(2));
   const c = map.getCenter();
   h.set('lon', c.lng.toFixed(3));
@@ -893,7 +1053,10 @@ function wireControls() {
   slider('altitude', 'altitude');
   $('sampling').value = Math.round(state.sampling * 100);
   slider('sampling', 'sampling');
-  for (const [id, key] of [['showTransit', 'showTransit'], ['showPeering', 'showPeering'], ['glow', 'glow'], ['backboneOnly', 'backboneOnly'], ['pops', 'pops']]) {
+  $('fiberCell').value = Math.round(state.fiberCell * 100);
+  slider('fiberCell', 'fiberCell');
+  slider('fiberWidth', 'fiberWidth');
+  for (const [id, key] of [['showTransit', 'showTransit'], ['showPeering', 'showPeering'], ['glow', 'glow'], ['backboneOnly', 'backboneOnly'], ['pops', 'pops'], ['fibers', 'fibers']]) {
     $(id).checked = state[key];
     $(id).addEventListener('change', (e) => {
       state[key] = e.target.checked;
@@ -934,6 +1097,7 @@ async function load(id) {
   G = await loadBundle(DATA_BASE, id);
   rankCum = null;
   routeLF = null;
+  fiberCache = { key: null, value: null };
   arcCache.clear();
   for (const k of Object.keys(lengthFactor)) delete lengthFactor[k];
   lowerNames = G.names.map((s) => s.toLowerCase());

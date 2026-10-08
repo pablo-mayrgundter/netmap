@@ -182,7 +182,7 @@ def cmd_tiles(args):
     for mode in args.modes.split(","):
         _step(f"rendering {mode} tiles to z{args.maxzoom}")
         tiles.pyramid(bundle, bundle / "tiles", mode, args.maxzoom, backbone_only=args.backbone,
-                      fmt=args.format)
+                      fmt=args.format, workers=args.workers)
     _update_index(bundle.parent)
 
 
@@ -232,6 +232,7 @@ def main(argv=None):
     t.add_argument("bundle")
     t.add_argument("--modes", default="cyber,hybrid,geo")
     t.add_argument("--maxzoom", type=int, default=5)
+    t.add_argument("--workers", type=int, default=0, help="processes (default: all cores)")
     t.add_argument("--format", default="png", choices=["png", "webp"],
                    help="webp is ~3x smaller (lossy q80); png is lossless")
     t.add_argument("--backbone", action="store_true",

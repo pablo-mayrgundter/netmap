@@ -24,4 +24,4 @@ build-backend = "setuptools.build_meta"
 include = ["netmap*"]
 
 [tool.setuptools.package-data]
-"netmap.native" = ["*.c", "Makefile"]
+"netmap.native" = ["*.c", "*.h", "Makefile"]

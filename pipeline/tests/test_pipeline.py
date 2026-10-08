@@ -293,3 +293,38 @@ def test_native_lgl_deterministic_and_sane():
     # Disconnected input is laid out rather than rejected.
     c = native.lgl(4, np.array([0, 2], np.int32), np.array([1, 3], np.int32), root=0)
     assert np.isfinite(c).all()
+
+
+def test_native_sample_rank_bfs_and_dijkstra():
+    from netmap import native
+
+    try:
+        native.load()
+    except native.NativeUnavailable:
+        pytest.skip("no C compiler")
+    g = ig.Graph.Erdos_Renyi(400, m=1600, directed=False).connected_components().giant()
+    el = np.asarray(g.get_edgelist(), np.int32)
+    roots = np.random.default_rng(1).permutation(g.vcount())[:50]
+    r1 = native.sample_rank(g.vcount(), el[:, 0], el[:, 1], roots, threads=1)
+    r4 = native.sample_rank(g.vcount(), el[:, 0], el[:, 1], roots, threads=4)
+    assert np.array_equal(r1, r4)
+    assert (r1 == 0).sum() == g.vcount() - 1  # one spanning tree
+    # Dijkstra: an edge that's far heavier than any detour is never sampled.
+    w = np.ones(len(el), np.float32)
+    w[0] = 1e6
+    rd = native.sample_rank(g.vcount(), el[:, 0], el[:, 1], roots, weights=w)
+    assert rd[0] == len(roots)
+    # Unit weights: every tree is still a spanning tree.
+    ru = native.sample_rank(g.vcount(), el[:, 0], el[:, 1], roots, weights=np.ones(len(el)))
+    assert (ru == 0).sum() == g.vcount() - 1
+
+
+def test_tile_pool_matches_single_process(tmp_path):
+    out, _ = _bundle(tmp_path)
+    n1 = tiles.pyramid(out, tmp_path / "t1", "hybrid", maxzoom=4, workers=1)
+    n2 = tiles.pyramid(out, tmp_path / "t2", "hybrid", maxzoom=4, workers=3)
+    assert n1 == n2 > 1
+    f1 = sorted(p.relative_to(tmp_path / "t1") for p in (tmp_path / "t1").rglob("*.png"))
+    f2 = sorted(p.relative_to(tmp_path / "t2") for p in (tmp_path / "t2").rglob("*.png"))
+    assert f1 == f2
+    assert all((tmp_path / "t1" / f).read_bytes() == (tmp_path / "t2" / f).read_bytes() for f in f1)

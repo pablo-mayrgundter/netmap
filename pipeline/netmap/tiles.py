@@ -40,7 +40,8 @@ PAD = 2.0
 class Scene:
     """Mercator coordinates, colours and weights for one mode of a bundle."""
 
-    def __init__(self, bundle: Path, mode: str, backbone_only: bool = False, pops: bool = True):
+    def __init__(self, bundle: Path, mode: str, backbone_only: bool = False, pops: bool = True,
+                 gain0: float | None = None):
         meta, a = read_bundle(bundle)
         self.meta = meta
         self.mode = mode
@@ -106,7 +107,7 @@ class Scene:
         self.by0 = np.minimum(self.ey0, self.ey1)
         self.by1 = np.maximum(self.ey0, self.ey1)
         self.gain0 = 1.0
-        self.gain0 = self._calibrate()
+        self.gain0 = self._calibrate() if gain0 is None else gain0
 
     def _calibrate(self, target=1.3, q=0.97):
         """Gain so the q-quantile of lit z0 pixels reaches 1-exp(-target)."""
@@ -246,39 +247,101 @@ def png_bytes(rgba: np.ndarray) -> bytes:
     return encode(rgba, "png")
 
 
+def _write_tile(scene, base, z, tx, ty, fmt, edges=None) -> int:
+    rgba = render(scene, z, tx, ty, edges=edges)
+    if not rgba[..., 3].any():
+        return 0
+    p = base / str(z) / str(tx) / f"{ty}.{fmt}"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(encode(rgba, fmt))
+    return 1
+
+
+def _visit(scene, base, fmt, z, tx, ty, subset, minzoom, maxzoom, stop_at=None, found=None) -> int:
+    """Render the subtree under (z, tx, ty); with ``stop_at``, collect the
+    non-empty tiles at that zoom into ``found`` instead of descending."""
+    idx = scene.edges_in(z, tx, ty, subset)
+    if len(idx) == 0 and len(scene.nodes_in(z, tx, ty)) == 0:
+        return 0
+    if stop_at is not None and z == stop_at:
+        found.append((z, tx, ty))
+        return 0
+    count = _write_tile(scene, base, z, tx, ty, fmt, idx) if z >= minzoom else 0
+    if z < maxzoom:
+        for dx in (0, 1):
+            for dy in (0, 1):
+                count += _visit(scene, base, fmt, z + 1, tx * 2 + dx, ty * 2 + dy, idx,
+                                minzoom, maxzoom, stop_at, found)
+    return count
+
+
+# Worker state: the scene is inherited (fork) or rebuilt once per process (spawn).
+_W: dict = {}
+
+
+def _worker_init(args):
+    bundle, mode, backbone_only, pops, gain0, base, fmt, minzoom, maxzoom, scene = args
+    if scene is None:
+        scene = Scene(bundle, mode, backbone_only=backbone_only, pops=pops, gain0=gain0)
+    _W.update(scene=scene, base=base, fmt=fmt, minzoom=minzoom, maxzoom=maxzoom)
+
+
+def _worker_task(task):
+    kind, z, tx, ty = task
+    sc = _W["scene"]
+    if kind == "tile":
+        return _write_tile(sc, _W["base"], z, tx, ty, _W["fmt"])
+    return _visit(sc, _W["base"], _W["fmt"], z, tx, ty, None, _W["minzoom"], _W["maxzoom"])
+
+
 def pyramid(bundle: Path, out: Path, mode: str, maxzoom: int, minzoom: int = 0,
-            backbone_only: bool = False, fmt: str = "png"):
-    """Pre-render all non-empty tiles from minzoom..maxzoom."""
+            backbone_only: bool = False, fmt: str = "png", workers: int | None = None):
+    """Pre-render all non-empty tiles from minzoom..maxzoom on all cores.
+
+    Tiles above a split zoom are rendered as individual tasks (they are the
+    heaviest: z0 holds every link); each tile at the split zoom is a task for
+    its whole subtree. Output is identical to a single-process run (gain is
+    calibrated once here; tile sampling noise is seeded per tile).
+    """
+    import multiprocessing as mp
+
+    from .native import cpu_count
+
     scene = Scene(bundle, mode, backbone_only=backbone_only)
     base = out / ("backbone" if backbone_only else "") / mode
     t0 = time.time()
-    count = 0
-
-    def visit(z, tx, ty, subset):
-        nonlocal count
-        idx = scene.edges_in(z, tx, ty, subset)
-        if len(idx) == 0 and len(scene.nodes_in(z, tx, ty)) == 0:
-            return
-        if z >= minzoom:
-            rgba = render(scene, z, tx, ty, edges=idx)
-            if rgba[..., 3].any():
-                p = base / str(z) / str(tx) / f"{ty}.{fmt}"
-                p.parent.mkdir(parents=True, exist_ok=True)
-                p.write_bytes(encode(rgba, fmt))
-                count += 1
-        if z < maxzoom:
-            for dx in (0, 1):
-                for dy in (0, 1):
-                    visit(z + 1, tx * 2 + dx, ty * 2 + dy, idx)
-
-    visit(0, 0, 0, None)
+    workers = workers or cpu_count()
+    if workers <= 1:
+        count = _visit(scene, base, fmt, 0, 0, 0, None, minzoom, maxzoom)
+    else:
+        # Enough subtree tasks to keep every worker busy, tiles above as singles.
+        split = min(maxzoom, max(1, int(math.ceil(math.log(8 * workers, 4)))))
+        roots: list = []
+        _visit(scene, base, fmt, 0, 0, 0, None, minzoom, maxzoom, stop_at=split, found=roots)
+        tasks = []
+        for z in range(minzoom, split):
+            n = 1 << z
+            tasks += [("tile", z, x, y) for x in range(n) for y in range(n)
+                      if len(scene.edges_in(z, x, y)) or len(scene.nodes_in(z, x, y))]
+        tasks += [("tree", z, x, y) for z, x, y in roots]
+        method = "fork" if sys.platform.startswith("linux") else "spawn"
+        ctx = mp.get_context(method)
+        _W.clear()
+        init = (bundle, mode, backbone_only, True, scene.gain0, base, fmt, minzoom, maxzoom,
+                scene if method == "fork" else None)
+        if method == "fork":
+            _worker_init(init)  # children inherit the scene copy-on-write
+            init = init[:-1] + (_W["scene"],)
+        with ctx.Pool(workers, initializer=_worker_init, initargs=(init,)) as pool:
+            count = sum(pool.imap_unordered(_worker_task, tasks, chunksize=1))
     base.mkdir(parents=True, exist_ok=True)
     (base / "tiles.json").write_text(json.dumps({
         "tilejson": "3.0.0", "name": f"netmap {mode}", "tiles": [f"{{z}}/{{x}}/{{y}}.{fmt}"],
         "format": fmt, "minzoom": minzoom, "maxzoom": maxzoom, "count": count,
         "attribution": "; ".join(scene.meta.get("attribution", [])),
     }, indent=1))
-    print(f"  {count} {mode} tiles z{minzoom}-{maxzoom} in {time.time() - t0:.0f}s", file=sys.stderr)
+    print(f"  {count} {mode} tiles z{minzoom}-{maxzoom} in {time.time() - t0:.0f}s "
+          f"({workers} worker{'s' if workers > 1 else ''})", file=sys.stderr)
     return count
 
 

@@ -23,7 +23,8 @@ from pathlib import Path
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
-SOURCES = [HERE / "lgl.c"]
+SOURCES = [HERE / "lgl.c", HERE / "paths.c"]
+HEADERS = [HERE / "pool.h"]
 BASE_FLAGS = ["-O3", "-std=gnu11", "-ffast-math", "-fopenmp-simd", "-fPIC", "-shared", "-pthread"]
 ERRORS = {1: "out of memory", 2: "invalid arguments"}
 
@@ -67,7 +68,7 @@ def load():
     if cc is None:
         _load_error = "no C compiler found (set CC)"
         raise NativeUnavailable(_load_error)
-    src_hash = hashlib.sha256(b"".join(p.read_bytes() for p in SOURCES)).hexdigest()[:16]
+    src_hash = hashlib.sha256(b"".join(p.read_bytes() for p in SOURCES + HEADERS)).hexdigest()[:16]
     tag = f"{platform.system()}-{platform.machine()}-{src_hash}"
     ext = ".dylib" if sys.platform == "darwin" else ".so"
     lib_path = _cache_dir() / f"libnetmap-{tag}{ext}"
@@ -81,7 +82,7 @@ def load():
                 if _try_compile(cc, BASE_FLAGS + extra, tmp_out):
                     break
             else:
-                _load_error = f"compiling {SOURCES[0].name} with {cc} failed"
+                _load_error = f"compiling {', '.join(p.name for p in SOURCES)} with {cc} failed"
                 raise NativeUnavailable(_load_error)
             os.replace(tmp_out, lib_path)
     lib = ctypes.CDLL(str(lib_path))
@@ -94,8 +95,29 @@ def load():
         ctypes.c_uint64, ctypes.c_int32,
         ctypes.POINTER(ctypes.c_double),
     ]
+    lib.netmap_sample_rank.restype = ctypes.c_int
+    lib.netmap_sample_rank.argtypes = [
+        ctypes.c_int32, ctypes.c_int64,
+        ctypes.POINTER(ctypes.c_int32), ctypes.POINTER(ctypes.c_int32),
+        ctypes.POINTER(ctypes.c_float),
+        ctypes.POINTER(ctypes.c_int32), ctypes.c_int32, ctypes.c_int32,
+        ctypes.POINTER(ctypes.c_int32),
+    ]
     _lib = lib
     return lib
+
+
+def cpu_count() -> int:
+    """Cores this process may run on (respects affinity/cgroup cpusets);
+    ``NETMAP_THREADS`` overrides."""
+    env = int(os.environ.get("NETMAP_THREADS", 0) or 0)
+    if env > 0:
+        return env
+    if hasattr(os, "process_cpu_count"):  # 3.13+
+        return os.process_cpu_count() or 1
+    if hasattr(os, "sched_getaffinity"):
+        return len(os.sched_getaffinity(0)) or 1
+    return os.cpu_count() or 1
 
 
 def lgl(n: int, src, dst, root: int = 0, maxiter: int = 150, maxdelta: float = 0,
@@ -106,7 +128,7 @@ def lgl(n: int, src, dst, root: int = 0, maxiter: int = 150, maxdelta: float = 0
     s = np.ascontiguousarray(src, dtype=np.int32)
     d = np.ascontiguousarray(dst, dtype=np.int32)
     out = np.empty((n, 2), dtype=np.float64)
-    threads = threads or int(os.environ.get("NETMAP_THREADS", 0)) or os.cpu_count() or 1
+    threads = threads or cpu_count()
     i32p = ctypes.POINTER(ctypes.c_int32)
     rc = lib.netmap_lgl(
         n, len(s), s.ctypes.data_as(i32p), d.ctypes.data_as(i32p), root, maxiter,
@@ -116,3 +138,25 @@ def lgl(n: int, src, dst, root: int = 0, maxiter: int = 150, maxdelta: float = 0
     if rc != 0:
         raise RuntimeError(f"netmap_lgl failed: {ERRORS.get(rc, rc)}")
     return out
+
+
+def sample_rank(n: int, src, dst, roots, weights=None, threads: int | None = None) -> np.ndarray:
+    """Index of the first root whose shortest-path tree uses each edge
+    (``len(roots)`` if none does). BFS, or Dijkstra with ``weights``."""
+    lib = load()
+    s = np.ascontiguousarray(src, dtype=np.int32)
+    d = np.ascontiguousarray(dst, dtype=np.int32)
+    r = np.ascontiguousarray(roots, dtype=np.int32)
+    rank = np.full(len(s), len(r), dtype=np.int32)
+    w = None if weights is None else np.ascontiguousarray(weights, dtype=np.float32)
+    if w is not None and (len(w) != len(s) or not np.isfinite(w).all() or (w < 0).any()):
+        raise ValueError("weights must be finite, non-negative, one per edge")
+    i32p = ctypes.POINTER(ctypes.c_int32)
+    rc = lib.netmap_sample_rank(
+        n, len(s), s.ctypes.data_as(i32p), d.ctypes.data_as(i32p),
+        None if w is None else w.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+        r.ctypes.data_as(i32p), len(r), threads or cpu_count(), rank.ctypes.data_as(i32p),
+    )
+    if rc != 0:
+        raise RuntimeError(f"netmap_sample_rank failed: {ERRORS.get(rc, rc)}")
+    return rank
