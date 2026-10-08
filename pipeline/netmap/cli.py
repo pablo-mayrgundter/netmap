@@ -16,6 +16,14 @@ ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CACHE = ROOT / "data" / "raw"
 DEFAULT_OUT = ROOT / "web" / "public" / "data"
 
+ATTRIBUTION_ITDK = ('The CAIDA UCSD Macroscopic Internet Topology Data Kit (ITDK) - {release}, '
+                    '<a href="https://catalog.caida.org/dataset/macroscopic_internet_topology_data_kit_itdk">catalog</a>')
+ATTRIBUTION_CAIDA_REL = ('The CAIDA UCSD AS Relationships Dataset - {name}, '
+                         '<a href="https://catalog.caida.org/dataset/as_relationships_serial_2">catalog</a>')
+
+ATTRIBUTION_CAIDA_ORG = ('The CAIDA UCSD AS to Organization Mapping Dataset, '
+                         '<a href="https://catalog.caida.org/dataset/as_organizations">catalog</a>')
+
 ATTRIBUTION = {
     "routeviews": "Prefix-to-AS: RouteViews / NRO via ip-location-db (CC BY 4.0)",
     "dbip-city": 'IP geolocation: <a href="https://db-ip.com">DB-IP</a> lite (CC BY 4.0)',
@@ -64,7 +72,8 @@ def cmd_build(args):
             org_path = sources.fetch_caida_as2org(cache)
         if org_path:
             orgs = asrel.parse_as2org(org_path)
-        attribution.append(ATTRIBUTION["caida"])
+        attribution.append(ATTRIBUTION_CAIDA_REL.format(name=path.name[:8]))
+        attribution.append(ATTRIBUTION_CAIDA_ORG)
     _step(f"topology: {topo.n} ASes, {topo.e} links")
 
     # Align profile rows to topology nodes.
@@ -164,6 +173,106 @@ def cmd_build(args):
     _step(f"done in {time.time() - t0:.0f}s: {meta['counts']}")
 
 
+def cmd_build_itdk(args):
+    """Router-level map from CAIDA's ITDK (traceroutes), aggregated to PoPs."""
+    import igraph as ig
+
+    from . import itdk
+
+    t0 = time.time()
+    cache = Path(args.cache)
+    release, files = itdk.fetch(cache, args.release)
+    _step(f"ITDK {release}: routers -> (AS, city) PoPs")
+    agg = itdk.aggregate(files, cache / f"itdk-{release}")
+    p = itdk.prune(agg, args.min_routers)
+    n = len(p["pop_asn"])
+    src, dst, weight = p["src"].astype(np.int64), p["dst"].astype(np.int64), p["weight"]
+    _step(f"  {n} PoPs with >= {args.min_routers} routers, {len(src)} PoP links, "
+          f"{int(weight.sum())} router links")
+
+    # AS-level context from CAIDA: names, relationships, hierarchy.
+    orgs, as_level, rel_p2c, rel_p2p = {}, {}, set(), set()
+    attribution = [ATTRIBUTION_ITDK.format(release=release)]
+    try:
+        asrel_path = sources.fetch_caida_asrel(cache, args.date)
+        orgs = asrel.parse_as2org(sources.fetch_caida_as2org(cache))
+        at = asrel.parse_asrel(asrel_path)
+        am = metrics.compute(at)
+        as_level = dict(zip(at.asns.tolist(), am.level.tolist()))
+        a_s, a_d = at.asns[at.src].astype(np.int64), at.asns[at.dst].astype(np.int64)
+        p2c = at.rel == asrel.P2C
+        rel_p2c = set(zip(a_s[p2c].tolist(), a_d[p2c].tolist()))
+        rel_p2p = set(zip(np.minimum(a_s, a_d)[~p2c].tolist(), np.maximum(a_s, a_d)[~p2c].tolist()))
+        attribution.append(ATTRIBUTION_CAIDA_REL.format(name=asrel_path.name[:8]))
+    except Exception as exc:  # offline: no relationships, names from ASNs
+        _step(f"  no CAIDA AS relationships ({exc}); all inter-AS links unlabelled")
+
+    asn = p["pop_asn"]
+    a_s, a_d = asn[src], asn[dst]
+    rel = np.zeros(len(src), np.int8)
+    rel[a_s == a_d] = itdk.INTRA
+    for k in np.flatnonzero(a_s != a_d):
+        x, y = int(a_s[k]), int(a_d[k])
+        if (x, y) in rel_p2c:
+            rel[k] = asrel.P2C
+        elif (y, x) in rel_p2c:
+            rel[k] = asrel.P2C
+            src[k], dst[k] = dst[k], src[k]  # provider first
+        elif (min(x, y), max(x, y)) in rel_p2p:
+            rel[k] = asrel.P2P
+    _step(f"  links: {int((rel == itdk.INTRA).sum())} intra-AS backbone, "
+          f"{int((rel == asrel.P2C).sum())} transit, {int((rel == asrel.P2P).sum())} peering")
+
+    topo = asrel.Topology(asns=asn.astype(np.uint32), src=src.astype(np.int32),
+                          dst=dst.astype(np.int32), rel=rel,
+                          source=f"CAIDA ITDK {release} ({itdk.TOPOLOGY}), routers aggregated to (AS, city) PoPs")
+    g = metrics.graph_of(topo)
+    m = metrics.compute(topo, g)
+    wdeg = np.bincount(np.concatenate([src, dst]), weights=np.concatenate([weight, weight]), minlength=n)
+    lw = np.log1p(wdeg)
+    lw = lw / max(lw.max(), 1e-9)
+    al = np.array([as_level.get(int(a), 0.0) for a in asn])
+    m.level = np.clip(0.6 * al + 0.4 * lw, 0, 1).astype(np.float32)
+
+    places = p["places"]
+    lat, lon = p["place_lat"][p["pop_place"]], p["place_lon"][p["pop_place"]]
+    _step("layouts")
+    geo_ll = layout.sunflower(lon, lat, np.log1p(p["routers"]).astype(float), np.ones(n, bool))
+    bmask = itdk.max_spanning_forest(n, src, dst, weight)
+    lg = ig.Graph(n=n, edges=np.stack([src[bmask], dst[bmask]], 1).tolist())
+    cyber = layout.cyber(lg, algo=args.cyber, seed=args.seed)
+    srank = metrics.sample_rank(topo, g, seed=args.seed)
+
+    names, countries, info = [], [], []
+    for i in range(n):
+        cc, region, city = (str(places[p["pop_place"][i]]).split("|") + ["", "", ""])[:3]
+        o = orgs.get(int(asn[i]))
+        as_name = (o.org or o.name) if o else f"AS{int(asn[i])}"
+        names.append(f"{as_name} · {city or cc}")
+        countries.append(cc)
+        info.append({
+            "asn": int(asn[i]), "name": names[-1], "as_name": as_name, "country": cc,
+            "city": city, "region": region, "routers": int(p["routers"][i]),
+            "router_links": int(wdeg[i]), "degree": int(m.degree[i]),
+            "providers": int(m.providers[i]), "customers": int(m.customers[i]),
+            "peers": int(m.peers[i]), "level": round(float(m.level[i]), 3),
+            "rank": int(m.rank[i]), "coreness": int(m.coreness[i]),
+        })
+    region_idx = np.array([REGIONS.index(region_of(c)) for c in countries], np.uint8)
+    out = Path(args.out) / args.name
+    _step(f"writing bundle to {out}")
+    allpin = np.ones(n, bool)
+    meta = export.write_bundle(
+        out, name=args.name, topo=topo, metrics=m, prof_rows=None,
+        layouts={"cyber": cyber, "geo": geo_ll, "hybrid": geo_ll},
+        region_idx=region_idx, has_geo=allpin, pinned=allpin, names=names, info_records=info,
+        attribution=attribution, backbone=bmask, sample_rank=srank, edge_weight=weight,
+        kind="routers",
+    )
+    _update_index(Path(args.out))
+    _step(f"done in {time.time() - t0:.0f}s: {meta['counts']}")
+
+
 def _update_index(root: Path):
     """datasets.json listing every bundle under the output root."""
     import json
@@ -227,6 +336,17 @@ def main(argv=None):
     b.add_argument("--seed", type=int, default=7)
     b.add_argument("--synthetic-scale", type=float, default=1.0, help="peering density for synthetic")
     b.set_defaults(fn=cmd_build)
+
+    r = sub.add_parser("build-itdk", help="router-level map from CAIDA ITDK traceroute topology")
+    r.add_argument("--name", default="routers", help="bundle id (directory name)")
+    r.add_argument("--out", default=str(DEFAULT_OUT))
+    r.add_argument("--release", help="ITDK release YYYY-MM (default latest)")
+    r.add_argument("--min-routers", type=int, default=5,
+                   help="drop (AS, city) PoPs with fewer geolocated routers")
+    r.add_argument("--date", help="CAIDA AS relationships snapshot YYYYMMDD (default latest)")
+    r.add_argument("--cyber", default="lgl", choices=["lgl", "lgl-igraph", "drl", "fr"])
+    r.add_argument("--seed", type=int, default=7)
+    r.set_defaults(fn=cmd_build_itdk)
 
     t = sub.add_parser("tiles", help="pre-render raster XYZ tiles for a bundle")
     t.add_argument("bundle")

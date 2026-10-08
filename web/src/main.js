@@ -223,7 +223,10 @@ function buildColours() {
     edgeColor[k * 4] = (a[0] + b[0]) >> 1;
     edgeColor[k * 4 + 1] = (a[1] + b[1]) >> 1;
     edgeColor[k * 4 + 2] = (a[2] + b[2]) >> 1;
-    edgeColor[k * 4 + 3] = G.edge_rel[k] === -1 ? 255 : 190;
+    // transit and intra-AS backbone brighter than peering; router-level
+    // bundles brighten with log(number of router links)
+    const w = G.edge_weight ? Math.min(1, 0.35 + 0.18 * Math.log2(1 + G.edge_weight[k])) : 1;
+    edgeColor[k * 4 + 3] = (G.edge_rel[k] === 0 ? 190 : 255) * w;
   }
 }
 
@@ -409,6 +412,7 @@ function computeFibers() {
   const NF = 13;
   let acc = new Float64Array(cap * NF); // ax ay az bx by bz r g b count transit peering inkSum
   let nb = 0;
+  let members = new Uint32Array(cap);
   for (let k = 0; k < G.e; k++) {
     if (G.edge_rank && G.edge_rank[k] > K) continue;
     if (!edgeVisible(k)) continue;
@@ -429,6 +433,9 @@ function computeFibers() {
         const grown = new Float64Array(cap * 2 * NF);
         grown.set(acc);
         acc = grown;
+        const gm = new Uint32Array(cap * 2);
+        gm.set(members);
+        members = gm;
         cap *= 2;
       }
     }
@@ -437,14 +444,16 @@ function computeFibers() {
     acc[o] += sx, acc[o + 1] += sy, acc[o + 2] += sz;
     acc[o + 3] += tx, acc[o + 4] += ty, acc[o + 5] += tz;
     acc[o + 6] += edgeColor[k * 4], acc[o + 7] += edgeColor[k * 4 + 1], acc[o + 8] += edgeColor[k * 4 + 2];
-    acc[o + 9] += 1;
-    acc[o + (G.edge_rel[k] === -1 ? 10 : 11)] += 1;
+    const wk = G.edge_weight ? G.edge_weight[k] : 1; // router links on router maps
+    acc[o + 9] += wk;
+    acc[o + (G.edge_rel[k] === 0 ? 11 : 10)] += wk;
     acc[o + 12] += (edgeColor[k * 4 + 3] / 255) * lf[k]; // the link's own brightness
     edgeBundle[k] = bi;
+    members[bi]++;
   }
   // keep bundles with enough members, biggest last (drawn on top)
   const keep = [];
-  for (let i = 0; i < nb; i++) if (acc[i * NF + 9] >= FIBER_MIN) keep.push(i);
+  for (let i = 0; i < nb; i++) if (members[i] >= FIBER_MIN) keep.push(i);
   keep.sort((x, y) => acc[x * NF + 9] - acc[y * NF + 9]);
   const remap = new Int32Array(nb).fill(-1);
   keep.forEach((bi, j) => (remap[bi] = j));
@@ -590,8 +599,9 @@ function renderSoon() {
 function edgeVisible(k) {
   if (state.backboneOnly && G.edge_backbone && !G.edge_backbone[k]) return false;
   const rel = G.edge_rel[k];
-  if (rel === -1 && !state.showTransit) return false;
-  if (rel !== -1 && !state.showPeering) return false;
+  // -1 transit, 0 peering, 1 intra-AS backbone (router maps; follows transit)
+  if (rel !== 0 && !state.showTransit) return false;
+  if (rel === 0 && !state.showPeering) return false;
   return visibleNode(G.edges[2 * k]) && visibleNode(G.edges[2 * k + 1]);
 }
 
@@ -901,7 +911,9 @@ function onHover(info) {
   } else if (info.layer?.id === 'fibers' && info.index >= 0) {
     const f = computeFibers().fibers[info.index];
     tip.hidden = false;
-    tip.textContent = `fiber: ${fmt(f.count)} links (${fmt(f.transit)} transit, ${fmt(f.peering)} peering)`;
+    tip.textContent = G.edge_weight
+      ? `fiber: ${fmt(f.count)} router links (${fmt(f.transit)} transit/backbone, ${fmt(f.peering)} peering)`
+      : `fiber: ${fmt(f.count)} links (${fmt(f.transit)} transit, ${fmt(f.peering)} peering)`;
     tip.style.left = `${info.x + 12}px`;
     tip.style.top = `${info.y + 12}px`;
   } else {
@@ -944,34 +956,44 @@ function flyTo(i) {
 const fmt = (x) => x.toLocaleString('en-US');
 
 function showInfo(i, r) {
+  const routers = G.meta.kind === 'routers';
+  const wOf = (d) => (G.edge_weight ? G.edge_weight[d.edge] : 0);
   const nb = G.neighbours(i)
-    .map((d) => ({ ...d, deg: G.degree[d.node] }))
-    .sort((a, b) => b.deg - a.deg);
+    .map((d) => ({ ...d, deg: G.degree[d.node], w: wOf(d) }))
+    .sort((a, b) => b.w - a.w || b.deg - a.deg);
   const relOf = (d) => {
-    if (G.edge_rel[d.edge] !== -1) return 'peer';
+    const rel = G.edge_rel[d.edge];
+    if (rel === 1) return 'backbone';
+    if (rel !== -1) return 'peer';
     return G.edges[2 * d.edge] === i ? 'customer' : 'provider';
   };
-  const slash24 = r.addrs / 256;
-  const sites = r.sites
+  const row = (k, v) => (v === undefined || v === null || v === '' ? '' : `<dt>${k}</dt><dd>${v}</dd>`);
+  const num = (x) => (typeof x === 'number' ? fmt(x) : undefined);
+  const sites = (r.sites || [])
     .map(([lat, lon, share, city]) => `<li>${esc(city || '?')} <span class="muted">${(share * 100).toFixed(0)}%</span></li>`)
     .join('');
-  const pfx = r.prefixes.map((p) => `<li>${p}</li>`).join('');
+  const pfx = (r.prefixes || []).map((p) => `<li>${p}</li>`).join('');
   const nbrs = nb
     .slice(0, 40)
-    .map((d) => `<li data-i="${d.node}"><span class="asn">AS${G.asn[d.node]}</span> ${esc(G.names[d.node])} <span class="muted">(${relOf(d)})</span></li>`)
+    .map((d) => `<li data-i="${d.node}"><span class="asn">AS${G.asn[d.node]}</span> ${esc(G.names[d.node])} <span class="muted">(${relOf(d)}${d.w ? `, ${fmt(d.w)} router links` : ''})</span></li>`)
     .join('');
+  const slash24 = r.addrs / 256;
+  const place = [r.city, r.region, r.country].filter(Boolean).map(esc).join(', ');
+  const rows = [
+    routers ? row('Location', place) : row('Country', `${esc(r.country || '—')} · ${esc(G.meta.regions[G.region[i]].name)}`),
+    row('Routers', num(r.routers)),
+    row('Router links', num(r.router_links)),
+    row('Rank', r.rank ? `#${fmt(r.rank)} by customer cone` : undefined),
+    row('Links', `${fmt(r.degree)} — ${fmt(r.providers)} providers, ${fmt(r.customers)} customers, ${fmt(r.peers)} ${routers ? 'peers/backbone' : 'peers'}`),
+    row('Cone', r.cone !== undefined ? `${fmt(r.cone)} ${routers ? 'PoPs' : 'ASes'}` : undefined),
+    row('k-core', r.coreness),
+    r.addrs !== undefined ? row('IPv4', `${fmt(r.addrs)} addrs (${slash24 >= 1 ? fmt(Math.round(slash24)) + ' /24s' : '< /24'}), ${fmt(r.nprefix)} ranges`) : '',
+    r.sites ? row('Geo', r.sites.length ? `${(r.concentration * 100).toFixed(0)}% near main site · ${r.pinned ? 'pinned' : 'floating'} in hybrid` : 'no geolocation') : '',
+  ].join('');
   $('infoBody').innerHTML = `
     <h2><span class="asn">AS${r.asn}</span> ${esc(r.name)}</h2>
     ${r.as_name && r.as_name !== r.name ? `<div class="muted">${esc(r.as_name)}</div>` : ''}
-    <dl>
-      <dt>Country</dt><dd>${esc(r.country || '—')} · ${esc(G.meta.regions[G.region[i]].name)}</dd>
-      <dt>Rank</dt><dd>#${fmt(r.rank)} by customer cone</dd>
-      <dt>Links</dt><dd>${fmt(r.degree)} — ${fmt(r.providers)} providers, ${fmt(r.customers)} customers, ${fmt(r.peers)} peers</dd>
-      <dt>Cone</dt><dd>${fmt(r.cone)} ASes</dd>
-      <dt>k-core</dt><dd>${r.coreness}</dd>
-      <dt>IPv4</dt><dd>${fmt(r.addrs)} addrs (${slash24 >= 1 ? fmt(Math.round(slash24)) + ' /24s' : '< /24'}), ${fmt(r.nprefix)} ranges</dd>
-      <dt>Geo</dt><dd>${r.sites.length ? `${(r.concentration * 100).toFixed(0)}% near main site · ${r.pinned ? 'pinned' : 'floating'} in hybrid` : 'no geolocation'}</dd>
-    </dl>
+    <dl>${rows}</dl>
     ${sites ? `<h3>Sites</h3><ul>${sites}</ul>` : ''}
     ${pfx ? `<h3>Prefixes${r.nprefix > r.prefixes.length ? ` (largest ${r.prefixes.length})` : ''}</h3><ul class="prefixes">${pfx}</ul>` : ''}
     <h3>Neighbours${nb.length > 40 ? ` (top 40 of ${fmt(nb.length)})` : ''}</h3>
@@ -1213,7 +1235,12 @@ async function load(id) {
     .map((r) => `<li><i style="color: rgb(${r.rgb.join(',')}); background: rgb(${r.rgb.join(',')})"></i>${esc(r.name.split(' /')[0])}</li>`)
     .join('');
   const c = m.counts;
-  $('stats').innerHTML = `${fmt(c.nodes)} ASes · ${fmt(c.edges)} links (${fmt(c.p2c)} transit, ${fmt(c.p2p)} peering) · ${fmt(c.geolocated)} geolocated, ${fmt(c.pinned)} pinned${c.backbone ? ` · ${fmt(c.backbone)} backbone` : ''}<br>${m.attribution.join('<br>')}`;
+  const isRouters = m.kind === 'routers';
+  const intra = isRouters ? c.edges - c.p2c - c.p2p : 0;
+  $('stats').innerHTML = isRouters
+    ? `${fmt(c.nodes)} PoPs (AS × city) · ${fmt(c.edges)} PoP links (${fmt(intra)} intra-AS backbone, ${fmt(c.p2c)} transit, ${fmt(c.p2p)} peering)<br>${m.attribution.join('<br>')}`
+    : `${fmt(c.nodes)} ASes · ${fmt(c.edges)} links (${fmt(c.p2c)} transit, ${fmt(c.p2p)} peering) · ${fmt(c.geolocated)} geolocated, ${fmt(c.pinned)} pinned${c.backbone ? ` · ${fmt(c.backbone)} backbone` : ''}<br>${m.attribution.join('<br>')}`;
+  $('transitLabel').textContent = isRouters ? 'transit + intra-AS backbone links' : 'transit links (provider→customer)';
   map.getContainer().querySelector('.maplibregl-ctrl-attrib-inner');
   updateRaster();
   render();

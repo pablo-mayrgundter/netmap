@@ -328,3 +328,41 @@ def test_tile_pool_matches_single_process(tmp_path):
     f2 = sorted(p.relative_to(tmp_path / "t2") for p in (tmp_path / "t2").rglob("*.png"))
     assert f1 == f2
     assert all((tmp_path / "t1" / f).read_bytes() == (tmp_path / "t2" / f).read_bytes() for f in f1)
+
+
+def test_itdk_aggregate_to_pops(tmp_path):
+    pytest.importorskip("pandas")
+    from netmap import itdk
+
+    def bz(name, text):
+        p = tmp_path / name
+        p.write_bytes(bz2.compress(text.encode()))
+        return p
+
+    # AS 10 has routers in Paris (N1, N2) and London (N3); AS 20 in London (N4).
+    files = {
+        "nodes.as": bz("as.bz2", "# c\nnode.AS\tN1\t10\torigins\nnode.AS\tN2\t10\torigins\n"
+                       "node.AS\tN3\t10\trefinement\nnode.AS\tN4\t20\tlasthop\nnode.AS\tN5\t0\tunknown\n"),
+        "nodes.geo": bz("geo.bz2", "# c\n"
+                        "node.geo N1:\tEU\tFR\tIDF\tParis\t48.85\t2.35\t\t\thoiho\n"
+                        "node.geo N2:\tEU\tFR\tIDF\tParis\t48.86\t2.34\t\t\thoiho\n"
+                        "node.geo N3:\tEU\tGB\tENG\tLondon\t51.50\t-0.12\t\t\tmaxmind\n"
+                        "node.geo N4:\tEU\tGB\tENG\tLondon\t51.51\t-0.13\t\t\tix\n"),
+        "links": bz("links.bz2", "# c\n"
+                    "link L1:  N1:1.1.1.1 N3:1.1.1.2\n"      # AS10 Paris-London (backbone)
+                    "link L2:  N2 N3\n"                       # again: weight 2
+                    "link L3:  N3:2.2.2.1 N4:2.2.2.2 N5\n"   # AS10-AS20 London; N5 has no PoP
+                    "link L4:  N1 N2\n"),                     # inside the Paris PoP: dropped
+    }
+    agg = itdk.aggregate(files, tmp_path / "cache")
+    assert len(agg["pop_asn"]) == 3 and sorted(agg["routers"].tolist()) == [1, 1, 2]
+    lab = {i: (int(agg["pop_asn"][i]), str(agg["places"][agg["pop_place"][i]]).split("|")[-1])
+           for i in range(3)}
+    links = {tuple(sorted((lab[s], lab[d]))): int(w) for s, d, w in zip(agg["src"], agg["dst"], agg["weight"])}
+    assert links == {((10, "London"), (10, "Paris")): 2, ((10, "London"), (20, "London")): 1}
+    # cached on second call
+    assert (tmp_path / "cache" / "pops.npz").exists()
+    p = itdk.prune(agg, min_routers=2)
+    assert len(p["pop_asn"]) == 0  # the only 2-router PoP has no remaining links
+    mask = itdk.max_spanning_forest(3, agg["src"], agg["dst"], agg["weight"])
+    assert mask.all()  # a tree already
