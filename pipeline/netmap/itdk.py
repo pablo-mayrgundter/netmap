@@ -93,57 +93,88 @@ def aggregate(files: dict[str, Path], cache: Path) -> dict:
     if npz.exists():
         z = np.load(npz, allow_pickle=True)
         return {k: z[k] for k in z.files}
+    import tempfile
+
+    import pandas as pd
+
     t0 = time.time()
-    # Three decompressors run in parallel; each frame is turned into compact
-    # numpy arrays and dropped as soon as it arrives (76M routers, 190M pairs).
-    with ThreadPoolExecutor(3) as ex:
-        f_as = ex.submit(_stream, files["nodes.as"], AWK_AS, "\t", names=["id", "asn"],
-                         dtype={"id": np.int32, "asn": np.int64})
-        f_geo = ex.submit(_stream, files["nodes.geo"], AWK_GEO, "\t",
-                          names=["id", "lat", "lon", "place"], keep_default_na=False,
-                          dtype={"id": np.int32, "lat": np.float32, "lon": np.float32,
-                                 "place": "category"})
-        f_links = ex.submit(_stream, files["links"], AWK_LINKS, None, names=["a", "b"],
-                            dtype={"a": np.int32, "b": np.int32})
-        a = f_as.result()
-        as_id, as_asn = a.id.to_numpy(), a.asn.to_numpy()
-        del a
-        g = f_geo.result()
-        geo_id = g.id.to_numpy()
-        glat, glon = g.lat.to_numpy(), g.lon.to_numpy()
-        pcode = g.place.cat.codes.to_numpy().astype(np.int32)
-        places = list(g.place.cat.categories)
-        del g
-        links = f_links.result()
-        la, lb = links.a.to_numpy(), links.b.to_numpy()
-        del links
-    print(f"  parsed {len(as_id)} AS rows, {len(geo_id)} geo rows, {len(la)} router pairs "
-          f"({time.time() - t0:.0f}s)", file=sys.stderr)
+    # Peak memory matters (GitHub runners have 16 GB): the 190M router pairs
+    # are decompressed to a temp file while the node files parse, then read
+    # in chunks and folded into PoP pairs as they go.
+    tmpdir = tempfile.TemporaryDirectory(dir=cache.parent if cache.parent.exists() else None)
+    pairs_path = Path(tmpdir.name) / "pairs.tsv"
+    bz = shutil.which("lbzip2") or shutil.which("pbzip2") or "bzip2"
+    with open(pairs_path, "wb") as out:
+        p1 = subprocess.Popen([bz, "-dc", str(files["links"])], stdout=subprocess.PIPE)
+        p2 = subprocess.Popen(["awk", AWK_LINKS], stdin=p1.stdout, stdout=out)
+        p1.stdout.close()
+        with ThreadPoolExecutor(2) as ex:
+            # int64: unknown owners are written as non-positive ASNs
+            f_as = ex.submit(_stream, files["nodes.as"], AWK_AS, "\t", names=["id", "asn"],
+                             dtype={"id": np.int32, "asn": np.int64})
+            f_geo = ex.submit(_stream, files["nodes.geo"], AWK_GEO, "\t",
+                              names=["id", "lat", "lon", "place"], keep_default_na=False,
+                              dtype={"id": np.int32, "lat": np.float32, "lon": np.float32,
+                                     "place": "category"})
+            a = f_as.result()
+            as_id = a.id.to_numpy()
+            as_asn = np.clip(a.asn.to_numpy(), 0, 2**32 - 1).astype(np.uint32)  # unknown -> 0
+            del a
+            g = f_geo.result()
+            geo_id = g.id.to_numpy()
+            glat, glon = g.lat.to_numpy(), g.lon.to_numpy()
+            pcode = g.place.cat.codes.to_numpy().astype(np.int32)
+            places = list(g.place.cat.categories)
+            del g
+        print(f"  parsed {len(as_id)} AS rows, {len(geo_id)} geo rows ({time.time() - t0:.0f}s)",
+              file=sys.stderr)
 
-    maxid = int(max(as_id.max(), geo_id.max(), la.max(), lb.max())) + 1
-    asn = np.zeros(maxid, np.int64)
-    asn[as_id] = as_asn
-    del as_id, as_asn
-    place = np.full(maxid, -1, np.int32)
-    place[geo_id] = pcode
-    n_place = np.bincount(pcode, minlength=len(places))
-    plat = np.bincount(pcode, weights=glat, minlength=len(places)) / np.maximum(n_place, 1)
-    plon = np.bincount(pcode, weights=glon, minlength=len(places)) / np.maximum(n_place, 1)
-    del geo_id, glat, glon, pcode
+        maxid = int(max(as_id.max(), geo_id.max())) + 1
+        asn = np.zeros(maxid, np.uint32)
+        asn[as_id] = as_asn
+        del as_id, as_asn
+        place = np.full(maxid, -1, np.int32)
+        place[geo_id] = pcode
+        n_place = np.bincount(pcode, minlength=len(places))
+        plat = np.bincount(pcode, weights=glat, minlength=len(places)) / np.maximum(n_place, 1)
+        plon = np.bincount(pcode, weights=glon, minlength=len(places)) / np.maximum(n_place, 1)
+        del geo_id, glat, glon, pcode
 
-    ok = (asn > 0) & (place >= 0)
-    keys = (asn[ok] << 24) | place[ok]
-    ukeys, inv = np.unique(keys, return_inverse=True)
-    pop = np.full(maxid, -1, np.int32)
-    pop[np.flatnonzero(ok)] = inv
-    routers = np.bincount(inv, minlength=len(ukeys))
+        ok = (asn > 0) & (place >= 0)
+        keys = (asn[ok].astype(np.int64) << 24) | place[ok]
+        ukeys, inv = np.unique(keys, return_inverse=True)
+        del keys, asn, place
+        pop = np.full(maxid, -1, np.int32)
+        pop[np.flatnonzero(ok)] = inv
+        routers = np.bincount(inv, minlength=len(ukeys))
+        n_routers = int(ok.sum())
+        del ok, inv
+        p2.wait()
+        p1.wait()
+        if p2.returncode or p1.returncode:
+            raise RuntimeError(f"decompressing {files['links']} failed")
 
-    pa, pb = pop[la], pop[lb]
-    del la, lb
-    m = (pa >= 0) & (pb >= 0) & (pa != pb)
-    lo = np.minimum(pa[m], pb[m]).astype(np.int64)
-    hi = np.maximum(pa[m], pb[m]).astype(np.int64)
-    ek, weight = np.unique(lo * len(ukeys) + hi, return_counts=True)
+    npop = len(ukeys)
+    parts_k, parts_c, n_pairs = [], [], 0
+    for chunk in pd.read_csv(pairs_path, sep="\t", header=None, names=["a", "b"], engine="c",
+                             dtype={"a": np.int32, "b": np.int32}, chunksize=20_000_000):
+        la, lb = chunk.a.to_numpy(), chunk.b.to_numpy()
+        n_pairs += len(la)
+        inside = (la < maxid) & (lb < maxid)
+        pa = np.where(inside, pop[np.minimum(la, maxid - 1)], -1)
+        pb = np.where(inside, pop[np.minimum(lb, maxid - 1)], -1)
+        m = (pa >= 0) & (pb >= 0) & (pa != pb)
+        lo = np.minimum(pa[m], pb[m]).astype(np.int64)
+        hi = np.maximum(pa[m], pb[m]).astype(np.int64)
+        k, c = np.unique(lo * npop + hi, return_counts=True)
+        parts_k.append(k)
+        parts_c.append(c)
+    tmpdir.cleanup()
+    allk = np.concatenate(parts_k)
+    ek, kinv = np.unique(allk, return_inverse=True)
+    weight = np.bincount(kinv, weights=np.concatenate(parts_c)).astype(np.int64)
+    del allk, kinv, parts_k, parts_c, pop
+    print(f"  folded {n_pairs} router pairs ({time.time() - t0:.0f}s)", file=sys.stderr)
     res = {
         "pop_asn": (ukeys >> 24).astype(np.int64),
         "pop_place": (ukeys & ((1 << 24) - 1)).astype(np.int32),
@@ -156,7 +187,7 @@ def aggregate(files: dict[str, Path], cache: Path) -> dict:
     }
     npz.parent.mkdir(parents=True, exist_ok=True)
     np.savez(npz, **res)
-    print(f"  {len(ukeys)} PoPs, {len(ek)} PoP links from {int(ok.sum())} routers "
+    print(f"  {len(ukeys)} PoPs, {len(ek)} PoP links from {n_routers} routers "
           f"({time.time() - t0:.0f}s)", file=sys.stderr)
     return res
 

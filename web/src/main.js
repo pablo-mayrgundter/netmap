@@ -1259,7 +1259,7 @@ async function boot() {
     return;
   }
   $('dataset').innerHTML = sets
-    .map((s) => `<option value="${s.id}">${esc(s.name)}${s.synthetic ? ' (synthetic)' : ''} — ${fmt(s.counts.nodes)} ASes</option>`)
+    .map((s) => `<option value="${s.id}">${esc(s.name)}${s.synthetic ? ' (synthetic)' : ''} — ${fmt(s.counts.nodes)} ${s.kind === 'routers' ? 'PoPs' : 'ASes'}</option>`)
     .join('');
   if (!state.dataset || !sets.some((s) => s.id === state.dataset)) state.dataset = sets[0].id;
   $('dataset').value = state.dataset;

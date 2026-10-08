@@ -281,6 +281,7 @@ def _update_index(root: Path):
     for p in sorted(root.glob("*/meta.json")):
         mt = json.loads(p.read_text())
         items.append({"id": p.parent.name, "name": mt["name"], "synthetic": mt["synthetic"],
+                      "kind": mt.get("kind", "as"),
                       "counts": mt["counts"], "generated": mt["generated"],
                       "tiles": sorted(d.name for d in (p.parent / "tiles").glob("*") if d.is_dir())})
     (root / "datasets.json").write_text(json.dumps(items, indent=1))

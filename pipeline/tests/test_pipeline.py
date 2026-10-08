@@ -342,7 +342,7 @@ def test_itdk_aggregate_to_pops(tmp_path):
     # AS 10 has routers in Paris (N1, N2) and London (N3); AS 20 in London (N4).
     files = {
         "nodes.as": bz("as.bz2", "# c\nnode.AS\tN1\t10\torigins\nnode.AS\tN2\t10\torigins\n"
-                       "node.AS\tN3\t10\trefinement\nnode.AS\tN4\t20\tlasthop\nnode.AS\tN5\t0\tunknown\n"),
+                       "node.AS\tN3\t10\trefinement\nnode.AS\tN4\t20\tlasthop\nnode.AS\tN5\t-1\tunknown\n"),
         "nodes.geo": bz("geo.bz2", "# c\n"
                         "node.geo N1:\tEU\tFR\tIDF\tParis\t48.85\t2.35\t\t\thoiho\n"
                         "node.geo N2:\tEU\tFR\tIDF\tParis\t48.86\t2.34\t\t\thoiho\n"
