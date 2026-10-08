@@ -47,13 +47,31 @@ cd web && npm install && npm run dev   # http://localhost:5173
 #   ?tiles=http://localhost:8765 uses the on-demand server for the raster renderer
 ```
 
+**Sampling.** The *Sampling* slider mimics how traceroute maps see the
+internet. Each link has a rank: the first of up to 255 random vantage ASes
+whose shortest-path (BFS) tree uses it. All the way left is one vantage
+point's spanning tree, about one link per AS, which is the sparse Opte look.
+Sliding right adds vantage points (16 trees ≈ 63% of links) up to the full AS
+graph. Links on no shortest path appear only at the far right. The filter
+runs on the GPU, so the slider is instant. *Backbone only* is a separate
+view: each AS's primary provider link plus the core mesh, which is what the
+cyber layout is computed from.
+
 Keys: `1` cyber · `2` hybrid · `3` geo · `g` globe · `/` search · `Esc` deselect.
 The URL hash keeps mode, view, camera and selected AS, so links are shareable.
 
-Full-size build times on a 4-core box (84k ASes, about 350k links): profiling
-geography takes about 30 s (plus about 20 s the first time to parse DB-IP),
-LGL a few minutes, and the hybrid harmonic solve plus relaxation under a
-minute. `--cyber drl` is available but much slower at this scale.
+Full-size build on a 4-core box (84k ASes, about 350k links) takes about
+3 minutes. Most of that is LGL (about 1.5 min) and, for synthetic builds,
+generating the graph. Parsing DB-IP adds about 20 s the first time only.
+Raster tiles take about 1 s each, so a z0–4 pyramid of all three modes is a
+few minutes. `--cyber drl` and `--fr-iters` are available, but they're much
+slower at this scale.
+
+The cyber layout runs LGL on a **backbone**: each AS's primary
+(largest-cone) provider link, plus the mesh among core ASes. Every link is
+still drawn. Laying out the full graph (`--cyber-graph full`) gives a
+featureless ball, because multihoming and peering tie everything together.
+The provider tree is where the Opte starbursts come from.
 
 ## Data
 
@@ -97,7 +115,8 @@ more spread out floats.
   `graph.bin`.
 * `graph.bin` holds packed typed arrays: `asn`, `pos_cyber`, `pos_geo` and
   `pos_hybrid` (lon/lat float32), `level`, `degree`, `cone`, `region`,
-  `flags`, `edges` (uint32 pairs) and `edge_rel` (−1 transit, 0 peering).
+  `flags`, `edges` (uint32 pairs), `edge_rel` (−1 transit, 0 peering),
+  `edge_rank` (sampling order, 255 = never sampled) and `edge_backbone`.
 * `names.json` and `info/<k>.json` (1024 nodes per chunk) are loaded lazily on
   click.
 

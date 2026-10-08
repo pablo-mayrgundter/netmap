@@ -10,8 +10,9 @@
   },
   "dependencies": {
     "@deck.gl/core": "^9.1.0",
-    "@deck.gl/layers": "^9.1.0",
+    "@deck.gl/extensions": "^9.4.0",
     "@deck.gl/geo-layers": "^9.1.0",
+    "@deck.gl/layers": "^9.1.0",
     "@deck.gl/mapbox": "^9.1.0",
     "maplibre-gl": "^5.0.0",
     "topojson-client": "^3.1.0",

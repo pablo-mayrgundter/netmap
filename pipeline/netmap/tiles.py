@@ -33,13 +33,14 @@ from .export import read_bundle
 from .layout import lonlat_to_merc
 
 TILE = 256
+LINK_INK = 0.004  # mercator length (~160 km at the equator) at full brightness
 PAD = 2.0
 
 
 class Scene:
     """Mercator coordinates, colours and weights for one mode of a bundle."""
 
-    def __init__(self, bundle: Path, mode: str):
+    def __init__(self, bundle: Path, mode: str, backbone_only: bool = False):
         meta, a = read_bundle(bundle)
         self.meta = meta
         self.mode = mode
@@ -56,6 +57,8 @@ class Scene:
         self.nvis = visible
         e = a["edges"].astype(np.int64)
         keep = visible[e[:, 0]] & visible[e[:, 1]]
+        if backbone_only and "edge_backbone" in a:
+            keep &= a["edge_backbone"].astype(bool)
         e = e[keep]
         self.es, self.ed = e[:, 0], e[:, 1]
         self.ecol = 0.5 * (self.ncol[self.es] + self.ncol[self.ed])
@@ -64,10 +67,24 @@ class Scene:
         self.ew = np.where(rel == -1, 1.0, 0.7)
         self.ex0, self.ey0 = self.x[self.es], self.y[self.es]
         self.ex1, self.ey1 = self.x[self.ed], self.y[self.ed]
+        # Fixed "ink" per link: long-haul lines are dimmer per pixel, so the
+        # world view isn't a white-out of trans-oceanic links (matches viewer).
+        length = np.hypot(self.ex1 - self.ex0, self.ey1 - self.ey0)
+        self.ew = self.ew * np.minimum(1.0, (LINK_INK / np.maximum(length, 1e-7)) ** 0.6)
         self.bx0 = np.minimum(self.ex0, self.ex1)
         self.bx1 = np.maximum(self.ex0, self.ex1)
         self.by0 = np.minimum(self.ey0, self.ey1)
         self.by1 = np.maximum(self.ey0, self.ey1)
+        self.gain0 = 1.0
+        self.gain0 = self._calibrate()
+
+    def _calibrate(self, target=1.3, q=0.97):
+        """Gain so the q-quantile of lit z0 pixels reaches 1-exp(-target)."""
+        st = {"max_samples": 3_000_000}
+        acc = render(self, 0, 0, 0, style={**st, "raw": True})
+        d = acc.max(axis=0)
+        lit = d[d > 0]
+        return float(target / np.quantile(lit, q)) if lit.size else 1.0
 
     def edges_in(self, z, tx, ty, subset=None):
         s = 1.0 / (1 << z)
@@ -124,7 +141,7 @@ def _splat(acc, px, py, w_rgb):
 
 def render(scene: Scene, z: int, tx: int, ty: int, edges=None, style: dict | None = None) -> np.ndarray:
     """Render one tile, returning an RGBA uint8 [256, 256, 4] array."""
-    st = {"edge_gain": 0.22, "node_gain": 0.9, "spacing": 0.75, "max_samples": 40_000_000}
+    st = {"edge_gain": scene.gain0, "node_gain": 0.9, "spacing": 0.75, "max_samples": 12_000_000}
     st.update(style or {})
     scale = TILE * (1 << z)
     acc = np.zeros((3, TILE, TILE), np.float64)
@@ -143,15 +160,21 @@ def render(scene: Scene, z: int, tx: int, ty: int, edges=None, style: dict | Non
             ns = np.maximum((ns * st["max_samples"] / ns.sum()).astype(np.int64), 1)
         rep = np.repeat(np.arange(len(ns)), ns)
         starts = np.repeat(np.cumsum(ns) - ns, ns)
-        t = (np.arange(len(rep)) - starts + 0.5) / ns[rep]
+        # Jittered (stratified) samples: thinned long edges then read as
+        # smooth haze instead of moire. Seeded per tile, so output is stable.
+        rng = np.random.default_rng((z << 48) ^ (tx << 24) ^ ty)
+        t = (np.arange(len(rep)) - starts + rng.random(len(rep))) / ns[rep]
         px = x0[rep] + t * (x1 - x0)[rep]
         py = y0[rep] + t * (y1 - y0)[rep]
         # Per-sample weight: edge intensity times pixel length per sample.
         wlen = (length / ns)[rep] * scene.ew[sel][rep]
         _splat(acc, px, py, scene.ecol[sel][rep] * wlen[:, None])
 
-    # Zoom-dependent gain: deeper zoom means fewer overlapping edges per px.
-    gain = st["edge_gain"] * (1.9 ** min(z, 9))
+    if st.get("raw"):
+        return acc
+    # Per-pixel density of long edges halves with each zoom level, so double
+    # the gain to keep a region's brightness roughly constant across zooms.
+    gain = st["edge_gain"] * (2.0 ** min(z, 12))
     img = 1.0 - np.exp(-gain * acc)
 
     nidx = scene.nodes_in(z, tx, ty)
@@ -160,7 +183,7 @@ def render(scene: Scene, z: int, tx: int, ty: int, edges=None, style: dict | Non
         px = scene.x[nidx] * scale - tx * TILE
         py = scene.y[nidx] * scale - ty * TILE
         w = scene.nweight[nidx] * (0.35 + 0.15 * min(z, 8))
-        _splat(nacc, px, py, scene.ncol[nidx] * w[:, None] * 0.6 + 0.4 * w[:, None])
+        _splat(nacc, px, py, scene.ncol[nidx] * w[:, None] * 0.8 + 0.2 * w[:, None])
         sigma = 0.6 + 0.12 * min(z, 10)
         for c in range(3):
             nacc[c] = gaussian_filter(nacc[c], sigma) * (2 * math.pi * sigma**2) ** 0.5
@@ -181,10 +204,11 @@ def png_bytes(rgba: np.ndarray) -> bytes:
     return buf.getvalue()
 
 
-def pyramid(bundle: Path, out: Path, mode: str, maxzoom: int, minzoom: int = 0):
+def pyramid(bundle: Path, out: Path, mode: str, maxzoom: int, minzoom: int = 0,
+            backbone_only: bool = False):
     """Pre-render all non-empty tiles from minzoom..maxzoom."""
-    scene = Scene(bundle, mode)
-    base = out / mode
+    scene = Scene(bundle, mode, backbone_only=backbone_only)
+    base = out / ("backbone" if backbone_only else "") / mode
     t0 = time.time()
     count = 0
 

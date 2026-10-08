@@ -207,3 +207,28 @@ def test_iata_hints():
     assert gz.locate("ae-1-3502.edge4.Frankfurt1.Level3.net").name == "Frankfurt"
     assert gz.locate("lhr25s34-in-f14.1e100.net").code == "LHR"
     assert gz.locate("host-1-2-3-4.example.net") is None
+
+
+def test_backbone_keeps_primary_provider_tree():
+    t = _tiny_topology()
+    m = metrics.compute(t)
+    bb = layout.backbone(t.n, t.src, t.dst, t.rel, m.cone, m.level, core_level=2.0)
+    got = sorted(tuple(sorted(e)) for e in bb.get_edgelist())
+    # Every customer keeps its single provider; node 0 has no provider so its
+    # peering link to 5 is kept too.
+    assert got == [(0, 1), (0, 2), (0, 3), (0, 4), (0, 5), (5, 6)]
+
+
+def test_sample_rank_sweeps_from_tree_to_full():
+    g = ig.Graph.Erdos_Renyi(200, m=800)
+    g = g.connected_components().giant()
+    el = np.asarray(g.get_edgelist())
+    t = asrel.Topology(asns=np.arange(g.vcount(), dtype=np.uint32), src=el[:, 0].astype(np.int32),
+                       dst=el[:, 1].astype(np.int32), rel=np.zeros(len(el), np.int8))
+    r = metrics.sample_rank(t, trees=20)
+    # First vantage point's tree spans the graph with exactly n-1 links.
+    assert (r == 0).sum() == g.vcount() - 1
+    counts = [(r <= k).sum() for k in range(20)]
+    assert all(a <= b for a, b in zip(counts, counts[1:]))
+    sub = ig.Graph(n=g.vcount(), edges=el[r == 0].tolist())
+    assert sub.is_connected()

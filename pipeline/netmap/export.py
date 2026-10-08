@@ -23,7 +23,8 @@ FORMAT_VERSION = 1
 
 
 def write_bundle(out: Path, *, name: str, topo, metrics, prof_rows, layouts, region_idx,
-                 has_geo, pinned, names, info_records, attribution: list[str]):
+                 has_geo, pinned, names, info_records, attribution: list[str],
+                 backbone=None, sample_rank=None):
     out.mkdir(parents=True, exist_ok=True)
     n, e = topo.n, topo.e
     flags = has_geo.astype(np.uint8) | (pinned.astype(np.uint8) << 1)
@@ -43,6 +44,8 @@ def write_bundle(out: Path, *, name: str, topo, metrics, prof_rows, layouts, reg
         ("flags", flags, [n]),
         ("edges", np.stack([topo.src, topo.dst], 1).astype(np.uint32).ravel(), [e, 2]),
         ("edge_rel", topo.rel.astype(np.int8), [e]),
+        ("edge_rank", (np.zeros(e) if sample_rank is None else sample_rank).astype(np.uint8), [e]),
+        ("edge_backbone", (np.ones(e, bool) if backbone is None else backbone).astype(np.uint8), [e]),
     ]
     table = {}
     off = 0
@@ -68,6 +71,7 @@ def write_bundle(out: Path, *, name: str, topo, metrics, prof_rows, layouts, reg
             "nodes": n, "edges": e,
             "p2c": int((topo.rel == -1).sum()), "p2p": int((topo.rel == 0).sum()),
             "geolocated": int(has_geo.sum()), "pinned": int(pinned.sum()),
+            "backbone": int(e if backbone is None else np.asarray(backbone).sum()),
         },
         "modes": ["cyber", "geo", "hybrid"],
         "regions": [{"id": r, "name": REGION_NAMES[r], "rgb": PALETTE[r]} for r in REGIONS],

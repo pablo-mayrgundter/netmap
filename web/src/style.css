@@ -65,6 +65,7 @@ select, input[type="search"] {
 }
 select { flex: 1; min-width: 0; }
 input[type="range"] { flex: 1; accent-color: var(--accent); }
+.hint { color: var(--muted); font-size: 11px; text-align: right; margin: -4px 0 4px; }
 .check { display: block; margin: 4px 0; color: var(--fg); }
 
 .seg { display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }

@@ -52,6 +52,41 @@ def _log(msg: str, t0: float):
 
 # --- cyber -----------------------------------------------------------------
 
+def backbone_mask(n: int, src, dst, rel, cone, level, core_level: float = 0.75) -> np.ndarray:
+    """Which links form the backbone: each AS's primary (largest-cone)
+    provider link, the mesh among core ASes, and the links of ASes that have
+    no provider at all.
+
+    That's roughly one link per AS, like the traceroute-derived trees in the
+    Opte maps. LGL lays out this graph (the full AS graph gives a featureless
+    ball: multihoming and IXP peering tie everything to everything), and the
+    viewer can draw only these links.
+    """
+    src = np.asarray(src, np.int64)
+    dst = np.asarray(dst, np.int64)
+    p2c = np.asarray(rel) == -1
+    eid = np.flatnonzero(p2c)
+    prov, cust = src[p2c], dst[p2c]
+    order = np.lexsort((-np.asarray(cone)[prov], cust))
+    first = np.ones(len(order), bool)
+    first[1:] = cust[order][1:] != cust[order][:-1]
+    mask = np.zeros(len(src), bool)
+    mask[eid[order][first]] = True
+    lv = np.asarray(level)
+    mask |= (lv[src] > core_level) & (lv[dst] > core_level)
+    orphan = np.ones(n, bool)
+    orphan[cust] = False
+    mask |= orphan[src] | orphan[dst]
+    return mask
+
+
+def backbone(n: int, src, dst, rel, cone, level, core_level: float = 0.75) -> ig.Graph:
+    """The backbone (see backbone_mask) as a graph, for layout."""
+    m = backbone_mask(n, src, dst, rel, cone, level, core_level)
+    e = np.stack([np.asarray(src)[m], np.asarray(dst)[m]], 1)
+    return ig.Graph(n=n, edges=e.tolist())
+
+
 def cyber(g: ig.Graph, algo: str = "lgl", seed: int = 1, root: int | None = None,
           margin: float = 0.06) -> tuple[np.ndarray, np.ndarray]:
     """Graph-only layout mapped into the Mercator square."""
@@ -97,8 +132,14 @@ def cyber(g: ig.Graph, algo: str = "lgl", seed: int = 1, root: int | None = None
             p /= max(np.abs(p).max(), 1e-9)
             xy[comp] = np.array([cx, cy]) + p * 0.01 * math.sqrt(m)
 
-    # Fit into the Mercator square.
-    xy /= max(np.abs(xy).max(), 1e-9)
+    # Fit into the Mercator square, softly compressing far-flung tree tips
+    # so they don't shrink everything else.
+    r = np.hypot(xy[:, 0], xy[:, 1])
+    knee = 0.85
+    big = r > knee
+    r2 = r.copy()
+    r2[big] = knee + (1 - knee) * np.tanh((r[big] - knee) / (1 - knee))
+    xy *= np.where(r > 0, r2 / np.maximum(r, 1e-12), 1)[:, None]
     mx = 0.5 + xy[:, 0] * (0.5 - margin)
     my = 0.5 + xy[:, 1] * (0.5 - margin)
     return merc_to_lonlat(mx, my)

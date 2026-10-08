@@ -2,6 +2,7 @@ import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { Deck, _GlobeView as GlobeView } from '@deck.gl/core';
 import { MapboxOverlay } from '@deck.gl/mapbox';
+import { DataFilterExtension } from '@deck.gl/extensions';
 import { ArcLayer, LineLayer, ScatterplotLayer, GeoJsonLayer, SolidPolygonLayer } from '@deck.gl/layers';
 import { feature } from 'topojson-client';
 import countries110 from 'world-atlas/countries-110m.json';
@@ -41,6 +42,8 @@ const state = {
   altitude: 0.5,
   showTransit: true,
   showPeering: true,
+  backboneOnly: hash.get('backbone') === '1',
+  sampling: hash.has('sample') ? Number(hash.get('sample')) : 1, // 0..1 slider position
   glow: true,
   selected: null, // node index
   hover: null,
@@ -82,6 +85,12 @@ function ensureGlobe() {
     layers: [],
     onHover: onHover,
     onClick: onClick,
+    onViewStateChange: ({ viewState }) => {
+      if (Math.abs(viewState.zoom - globeZoom) > 0.05) {
+        globeZoom = viewState.zoom;
+        renderSoon();
+      }
+    },
     getCursor: ({ isHovering }) => (isHovering ? 'pointer' : 'grab'),
   });
   return globe;
@@ -129,10 +138,11 @@ function updateRaster() {
   if (map.getSource('net')) map.removeSource('net');
   if (state.renderer !== 'raster' || !G) return;
   const base = TILE_SERVER || `${G.root}/tiles`;
-  const tm = tilesMeta[state.mode] || {};
+  const layer = state.backboneOnly ? `backbone/${state.mode}` : state.mode;
+  const tm = tilesMeta[layer] || tilesMeta[state.mode] || {};
   map.addSource('net', {
     type: 'raster',
-    tiles: [`${base}/${state.mode}/{z}/{x}/{y}.png`],
+    tiles: [`${base}/${layer}/{z}/{x}/{y}.png`],
     tileSize: 256,
     minzoom: 0,
     maxzoom: TILE_SERVER ? 14 : tm.maxzoom ?? 5,
@@ -158,6 +168,29 @@ function buildColours() {
     edgeColor[k * 4 + 2] = (a[2] + b[2]) >> 1;
     edgeColor[k * 4 + 3] = G.edge_rel[k] === -1 ? 255 : 190;
   }
+}
+
+// Per-edge brightness by on-screen length, per mode: each link gets a fixed
+// amount of "ink", so hundreds of thousands of trans-oceanic lines don't
+// saturate an 8-bit framebuffer and metro-scale structure stays visible.
+const lengthFactor = {};
+function edgeLengthFactor(mode) {
+  if (lengthFactor[mode]) return lengthFactor[mode];
+  const p = G[`pos_${mode}`];
+  const merc = (lon, lat) => {
+    const s = Math.sin((Math.max(-85, Math.min(85, lat)) * Math.PI) / 180);
+    return [(lon + 180) / 360, 0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)];
+  };
+  const f = new Float32Array(G.e);
+  for (let k = 0; k < G.e; k++) {
+    const a = G.edges[2 * k];
+    const b = G.edges[2 * k + 1];
+    const [x0, y0] = merc(p[2 * a], p[2 * a + 1]);
+    const [x1, y1] = merc(p[2 * b], p[2 * b + 1]);
+    const len = Math.hypot(x1 - x0, y1 - y0);
+    f[k] = Math.min(1, Math.pow(0.004 / Math.max(len, 1e-7), 0.6));
+  }
+  return (lengthFactor[mode] = f);
 }
 
 // --- positions -----------------------------------------------------------
@@ -198,7 +231,53 @@ function blendParams(globeView) {
   return p;
 }
 
+// Traceroute-style sampling (edge_rank = first vantage tree using the link).
+const FULL_RANK = 255;
+function sampleK() {
+  if (state.sampling >= 1) return FULL_RANK;
+  return Math.max(0, Math.floor(Math.pow(FULL_RANK, state.sampling)) - 1);
+}
+let rankCum = null; // links visible at each k
+function visibleAtK(k) {
+  if (!G?.edge_rank) return G ? G.e : 1;
+  if (!rankCum) {
+    rankCum = new Uint32Array(256);
+    for (let i = 0; i < G.e; i++) rankCum[G.edge_rank[i]]++;
+    for (let i = 1; i < 256; i++) rankCum[i] += rankCum[i - 1];
+  }
+  return rankCum[k];
+}
+function samplingLabel() {
+  const k = sampleK();
+  const v = visibleAtK(k);
+  const what = k >= FULL_RANK ? 'all links' : k === 0 ? '1 vantage tree' : `${k + 1} vantage trees`;
+  return `${what} · ${fmt(v)} links`;
+}
+
+// Per-line opacity. Hundreds of thousands of additive lines blow out to white
+// at world scale, so lines start faint and brighten as you zoom in and they
+// spread apart. A layer uniform, so changing it is free.
+let globeZoom = 1;
+function edgeOpacity(globeView) {
+  const z = globeView ? globeZoom + 0.6 : map.getZoom();
+  let k = (state.glow ? 0.0025 : 0.007) * Math.pow(state.edgeAlpha / 0.35, 2);
+  if (state.backboneOnly && G) k *= G.e / Math.max(G.meta.counts.backbone || G.e, 1) / 1.5;
+  else if (G) k *= Math.pow(G.e / Math.max(visibleAtK(sampleK()), 1), 0.6);
+  return Math.min(1, k * Math.pow(2, z));
+}
+
+let pending = false;
+function renderSoon() {
+  if (pending) return;
+  pending = true;
+  requestAnimationFrame(() => {
+    pending = false;
+    render();
+  });
+}
+
 function edgeVisible(k) {
+  if (state.backboneOnly && G.edge_backbone && !G.edge_backbone[k]) return false;
   const rel = G.edge_rel[k];
   if (rel === -1 && !state.showTransit) return false;
   if (rel !== -1 && !state.showPeering) return false;
@@ -210,14 +289,15 @@ const TRANSITION = { duration: 1400, easing: (t) => t * t * (3 - 2 * t) };
 function networkLayers(globeView) {
   if (!G) return [];
   const trig = `${state.mode}|${state.view}|${state.altitude}`;
-  const colourTrig = `${state.mode}|${state.edgeAlpha}|${state.showTransit}|${state.showPeering}|${state.glow}`;
-  const edgeA = state.glow ? state.edgeAlpha * 0.5 : state.edgeAlpha;
+  const colourTrig = `${state.mode}|${state.showTransit}|${state.showPeering}|${state.backboneOnly}`;
+  const opacity = edgeOpacity(globeView);
+  const lf = edgeLengthFactor(state.mode);
   const getEdgeColor = (_, { index, target }) => {
     const o = index * 4;
     target[0] = edgeColor[o];
     target[1] = edgeColor[o + 1];
     target[2] = edgeColor[o + 2];
-    target[3] = edgeVisible(index) ? edgeColor[o + 3] * edgeA : 0;
+    target[3] = edgeVisible(index) ? edgeColor[o + 3] * lf[index] : 0;
     return target;
   };
   const edgeData = { length: G.e };
@@ -239,6 +319,10 @@ function networkLayers(globeView) {
           getHeight: (_, { index }) => 0.08 + 0.35 * Math.max(G.level[G.edges[2 * index]], G.level[G.edges[2 * index + 1]]) * state.altitude,
           greatCircle: true,
           numSegments: 20,
+          opacity,
+          extensions: G.edge_rank ? [new DataFilterExtension({ filterSize: 1 })] : [],
+          getFilterValue: (_, { index }) => (G.edge_rank ? G.edge_rank[index] : 0),
+          filterRange: [0, sampleK()],
           getWidth: 1,
           widthUnits: 'pixels',
           parameters: blendParams(true),
@@ -254,6 +338,10 @@ function networkLayers(globeView) {
           getSourcePosition: src,
           getTargetPosition: dst,
           getColor: getEdgeColor,
+          opacity,
+          extensions: G.edge_rank ? [new DataFilterExtension({ filterSize: 1 })] : [],
+          getFilterValue: (_, { index }) => (G.edge_rank ? G.edge_rank[index] : 0),
+          filterRange: [0, sampleK()],
           getWidth: 1,
           widthUnits: 'pixels',
           parameters: blendParams(false),
@@ -287,28 +375,32 @@ function networkLayers(globeView) {
     );
   }
 
-  const sizeK = 0.25 + state.nodeSize * 2.2;
+  const z = globeView ? globeZoom + 0.6 : map.getZoom();
+  const sizeK = (0.25 + state.nodeSize * 2.2) * Math.min(1.6, 0.45 + 0.13 * z);
+  const nodeOpacity = Math.min(0.9, 0.1 * Math.pow(2, z - 1) * (state.glow ? 1 : 2.5));
   layers.push(
     new ScatterplotLayer({
       id: 'nodes',
       data: { length: G.n },
       getPosition: (_, { index, target }) => pos(index, target),
-      getRadius: (_, { index }) => (visibleNode(index) ? (0.6 + Math.log2(G.degree[index] + 1) * 0.55) * sizeK : 0),
+      getRadius: (_, { index }) => (visibleNode(index) ? 0.6 + Math.log2(G.degree[index] + 1) * 0.55 : 0),
       getFillColor: (_, { index, target }) => {
         const o = index * 4;
         target[0] = nodeColor[o];
         target[1] = nodeColor[o + 1];
         target[2] = nodeColor[o + 2];
-        target[3] = showVectors ? 210 : 0;
+        target[3] = showVectors ? 255 : 0;
         return target;
       },
       radiusUnits: 'pixels',
       radiusMinPixels: 0,
+      radiusScale: sizeK,
+      opacity: nodeOpacity,
       pickable: true,
       autoHighlight: true,
       highlightColor: [255, 255, 255, 255],
       parameters: blendParams(globeView),
-      updateTriggers: { getPosition: trig, getRadius: `${state.mode}|${state.nodeSize}`, getFillColor: `${showVectors}` },
+      updateTriggers: { getPosition: trig, getRadius: state.mode, getFillColor: `${showVectors}` },
       transitions: { getPosition: TRANSITION },
     }),
   );
@@ -525,6 +617,7 @@ function wireSearch() {
 // --- controls ------------------------------------------------------------
 
 function syncControls() {
+  $('samplingLabel').textContent = G ? samplingLabel() : '';
   for (const b of $('mode').children) b.classList.toggle('on', b.dataset.v === state.mode);
   for (const b of $('view').children) b.classList.toggle('on', b.dataset.v === state.view);
   $('basemap').value = state.basemap;
@@ -539,6 +632,8 @@ function writeHash() {
   h.set('mode', state.mode);
   h.set('view', state.view);
   h.set('basemap', state.basemap);
+  if (state.backboneOnly) h.set('backbone', '1');
+  if (state.sampling < 1) h.set('sample', state.sampling.toFixed(2));
   const c = map.getCenter();
   h.set('lon', c.lng.toFixed(3));
   h.set('lat', c.lat.toFixed(3));
@@ -579,9 +674,13 @@ function wireControls() {
   slider('edgeAlpha', 'edgeAlpha');
   slider('nodeSize', 'nodeSize');
   slider('altitude', 'altitude');
-  for (const [id, key] of [['showTransit', 'showTransit'], ['showPeering', 'showPeering'], ['glow', 'glow']]) {
+  $('sampling').value = Math.round(state.sampling * 100);
+  slider('sampling', 'sampling');
+  for (const [id, key] of [['showTransit', 'showTransit'], ['showPeering', 'showPeering'], ['glow', 'glow'], ['backboneOnly', 'backboneOnly']]) {
+    $(id).checked = state[key];
     $(id).addEventListener('change', (e) => {
       state[key] = e.target.checked;
+      if (key === 'backboneOnly') updateRaster();
       render();
     });
   }
@@ -593,6 +692,7 @@ function wireControls() {
     load(state.dataset);
   });
   map.on('moveend', writeHash);
+  map.on('zoom', renderSoon);
   window.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
     const modes = { 1: 'cyber', 2: 'hybrid', 3: 'geo' };
@@ -615,10 +715,11 @@ function wireControls() {
 async function load(id) {
   $('stats').textContent = 'loading…';
   G = await loadBundle(DATA_BASE, id);
+  rankCum = null;
   lowerNames = G.names.map((s) => s.toLowerCase());
   buildColours();
   tilesMeta = {};
-  for (const m of G.meta.modes) {
+  for (const m of G.meta.modes.flatMap((m) => [m, `backbone/${m}`])) {
     try {
       const r = await fetch(`${G.root}/tiles/${m}/tiles.json`);
       if (r.ok) tilesMeta[m] = await r.json();
@@ -639,7 +740,7 @@ async function load(id) {
     .map((r) => `<li><i style="color: rgb(${r.rgb.join(',')}); background: rgb(${r.rgb.join(',')})"></i>${esc(r.name.split(' /')[0])}</li>`)
     .join('');
   const c = m.counts;
-  $('stats').innerHTML = `${fmt(c.nodes)} ASes · ${fmt(c.edges)} links (${fmt(c.p2c)} transit, ${fmt(c.p2p)} peering) · ${fmt(c.geolocated)} geolocated, ${fmt(c.pinned)} pinned<br>${m.attribution.join('<br>')}`;
+  $('stats').innerHTML = `${fmt(c.nodes)} ASes · ${fmt(c.edges)} links (${fmt(c.p2c)} transit, ${fmt(c.p2p)} peering) · ${fmt(c.geolocated)} geolocated, ${fmt(c.pinned)} pinned${c.backbone ? ` · ${fmt(c.backbone)} backbone` : ''}<br>${m.attribution.join('<br>')}`;
   map.getContainer().querySelector('.maplibregl-ctrl-attrib-inner');
   updateRaster();
   render();

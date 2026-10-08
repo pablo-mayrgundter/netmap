@@ -54,3 +54,41 @@ def compute(topo: Topology, g: ig.Graph | None = None) -> Metrics:
     kc = coreness / max(coreness.max(), 1)
     level = np.clip(0.65 * lc + 0.35 * kc**1.5, 0, 1).astype(np.float32)
     return Metrics(deg, providers, customers, peers, cone, coreness, rank, level)
+
+
+def sample_rank(topo: Topology, g: ig.Graph | None = None, trees: int = 255, seed: int = 7) -> np.ndarray:
+    """Traceroute-style sampling order of links.
+
+    Vantage ASes are taken in random order; from each, the BFS shortest-path
+    tree to every other AS is what traceroutes from there would reveal. A
+    link's rank is the index of the first tree that uses it (0 = the first
+    vantage point's spanning tree), and ``trees`` for links no tree uses.
+    Showing links with rank <= k sweeps from one spanning tree (the sparse
+    Opte look) to the full AS graph.
+    """
+    n, e = topo.n, topo.e
+    g = g or graph_of(topo)
+    lo = np.minimum(topo.src, topo.dst).astype(np.int64)
+    hi = np.maximum(topo.src, topo.dst).astype(np.int64)
+    key = lo * n + hi
+    order = np.argsort(key)
+    skey = key[order]
+    rank = np.full(e, trees, np.int32)
+    rng = np.random.default_rng(seed)
+    # Vantage points in the giant component only (others reach nothing).
+    members = np.asarray(g.connected_components().membership)
+    gid = int(np.argmax(np.bincount(members))) if n else 0
+    cand = np.flatnonzero(members == gid)
+    roots = rng.permutation(cand)[:trees]
+    vs = np.arange(n)
+    for k, r in enumerate(roots):
+        _, _, parent = g.bfs(int(r))
+        parent = np.asarray(parent)
+        ok = (parent >= 0) & (parent != vs)
+        a, b = vs[ok], parent[ok]
+        q = np.minimum(a, b) * n + np.maximum(a, b)
+        pos = np.searchsorted(skey, q)
+        eid = order[pos]
+        new = rank[eid] > k
+        rank[eid[new]] = k
+    return rank

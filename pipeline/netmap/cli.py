@@ -93,8 +93,15 @@ def cmd_build(args):
         countries.append(cc or (o.country if o else ""))
     region_idx = np.array([REGIONS.index(region_of(c)) for c in countries], np.uint8)
 
-    _step(f"cyber layout ({args.cyber})")
-    cyber = layout.cyber(g, algo=args.cyber, seed=args.seed)
+    _step("traceroute-style link sampling order")
+    srank = metrics.sample_rank(topo, g, seed=args.seed)
+    _step(f"cyber layout ({args.cyber} on {args.cyber_graph} graph)")
+    bmask = layout.backbone_mask(topo.n, topo.src, topo.dst, topo.rel, m.cone, m.level)
+    _step(f"  backbone: {int(bmask.sum())} of {topo.e} links")
+    lg = g
+    if args.cyber_graph == "backbone":
+        lg = layout.backbone(topo.n, topo.src, topo.dst, topo.rel, m.cone, m.level)
+    cyber = layout.cyber(lg, algo=args.cyber, seed=args.seed)
     pinned = has_geo & (conc >= args.pin_threshold) & (m.cone <= args.pin_max_cone)
     _step("geo layout")
     weight = np.log1p(m.degree) + np.log1p(addrs) * 0.1
@@ -139,7 +146,8 @@ def cmd_build(args):
     meta = export.write_bundle(
         out, name=args.name, topo=topo, metrics=m, prof_rows=rows,
         layouts={"cyber": cyber, "geo": (geo_lon, geo_lat), "hybrid": hyb},
-        region_idx=region_idx, has_geo=has_geo, pinned=pinned, names=names,
+        region_idx=region_idx, has_geo=has_geo, pinned=pinned, names=names, backbone=bmask,
+        sample_rank=srank,
         info_records=info, attribution=attribution,
     )
     _update_index(Path(args.out))
@@ -163,7 +171,7 @@ def cmd_tiles(args):
     bundle = Path(args.bundle)
     for mode in args.modes.split(","):
         _step(f"rendering {mode} tiles to z{args.maxzoom}")
-        tiles.pyramid(bundle, bundle / "tiles", mode, args.maxzoom)
+        tiles.pyramid(bundle, bundle / "tiles", mode, args.maxzoom, backbone_only=args.backbone)
     _update_index(bundle.parent)
 
 
@@ -192,6 +200,8 @@ def main(argv=None):
     b.add_argument("--date", help="CAIDA snapshot YYYYMMDD (default latest)")
     b.add_argument("--geo", default="dbip-city", choices=["dbip-city", "geolite2-city"])
     b.add_argument("--cyber", default="lgl", choices=["lgl", "drl", "fr"], help="graph layout algorithm")
+    b.add_argument("--cyber-graph", default="backbone", choices=["backbone", "full"],
+                   help="lay out the primary-provider tree + core (Opte look) or every link")
     b.add_argument("--pin-threshold", type=float, default=0.6,
                    help="min share of an AS's addresses near its main site to pin it in hybrid")
     b.add_argument("--pin-max-cone", type=int, default=400,
@@ -210,6 +220,8 @@ def main(argv=None):
     t.add_argument("bundle")
     t.add_argument("--modes", default="cyber,hybrid,geo")
     t.add_argument("--maxzoom", type=int, default=5)
+    t.add_argument("--backbone", action="store_true",
+                   help="draw only backbone links (tiles/backbone/<mode>/...)")
     t.set_defaults(fn=cmd_tiles)
 
     s = sub.add_parser("serve-tiles", help="render tiles on demand (any zoom), with a disk cache")
