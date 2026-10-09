@@ -66,11 +66,14 @@ follows the light of the links it replaces. Member links are hidden. The
 650 km), and hovering a fiber shows its transit/peering counts. It works in
 cyber mode too, where it bundles links between nearby clusters.
 
-Keys: `1` cyber · `2` hybrid · `3` geo · `g` globe · `/` search · `Esc` deselect.
+Keys: `1` cyber · `2` hybrid · `3` geo · `g` globe · `/` search · `Esc` stop
+exploring, then clear the route. Camera (hold): `↑`/`↓` pitch, `←`/`→` rotate,
+`A`/`D` strafe, `W`/`S` zoom; on the globe the arrows orbit. The compass resets
+rotation and pitch.
 The URL hash is a full permalink: every control (layout, view, basemap,
 renderer, sliders, toggles), the dataset, the camera (2D map or globe) and the
 selected AS. Opening a link restores the view exactly. Without a hash the
-viewer starts on the hybrid globe with backbone, points of presence and
+viewer starts on the geo globe with backbone, points of presence and
 region-scale fiber bundles on.
 
 A full CAIDA build (81k ASes, 657k links) takes about 30 s on a 4-core
