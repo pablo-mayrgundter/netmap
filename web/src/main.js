@@ -419,6 +419,7 @@ function computeFibers() {
   const a = [0, 0, 0];
   const b = [0, 0, 0];
   const lf = edgeLengthFactor(state.mode);
+  const cut = coreCut();
   const index = new Map();
   const edgeBundle = new Int32Array(G.e).fill(-1);
   // per-bundle accumulators (grown as needed)
@@ -429,7 +430,7 @@ function computeFibers() {
   let members = new Uint32Array(cap);
   for (let k = 0; k < G.e; k++) {
     if (G.edge_rank && G.edge_rank[k] > K) continue;
-    if (G.edgeCore[k] < state.core) continue;
+    if (G.edgeCore[k] < cut) continue;
     if (!edgeVisible(k)) continue;
     endPos(k, 0, a);
     endPos(k, 1, b);
@@ -578,17 +579,25 @@ function computeCoreRank() {
   G.edgeCore = new Float32Array(G.e);
   for (let k = 0; k < G.e; k++) G.edgeCore[k] = Math.min(G.coreRank[G.edges[2 * k]], G.coreRank[G.edges[2 * k + 1]]);
 }
-const coreRange = () => [state.core, 1];
+// Slider position -> fraction of nodes kept, log scale: 100% at the left
+// down to the top 0.5% (a few hundred core networks) at the right.
+const CORE_MIN_KEEP = 0.005;
+const coreKeep = () => Math.pow(CORE_MIN_KEEP, state.core);
+const coreCut = () => (state.core > 0 ? 1 - coreKeep() : 0); // coreRank threshold
+const coreRange = () => [coreCut(), 1];
 const nodeFilter = new DataFilterExtension({ filterSize: 1 });
 function coreLabel() {
   if (!G?.edgeCore || state.core <= 0) return 'all nodes';
+  const cut = coreCut();
   const K = sampleK();
   const links = memo(`coreLinks|${state.core}|${K}`, () => {
     let c = 0;
-    for (let k = 0; k < G.e; k++) if (G.edgeCore[k] >= state.core && (!G.edge_rank || G.edge_rank[k] <= K)) c++;
+    for (let k = 0; k < G.e; k++) if (G.edgeCore[k] >= cut && (!G.edge_rank || G.edge_rank[k] <= K)) c++;
     return c;
   });
-  return `core ${Math.round((1 - state.core) * 100)}% of nodes · ${fmt(links)} links`;
+  const keep = coreKeep();
+  const pct = keep >= 0.1 ? Math.round(keep * 100) : +(keep * 100).toFixed(1);
+  return `keeping the core ${pct}% (${fmt(Math.round(keep * G.n))} nodes) · ${fmt(links)} links`;
 }
 
 // Traceroute-style sampling (edge_rank = first vantage tree using the link).

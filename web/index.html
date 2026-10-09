@@ -62,7 +62,7 @@
         <label class="row"><span>Nodes</span><input id="nodeSize" type="range" min="0" max="100" value="0" /></label>
         <label class="row" title="Links seen by traceroute-style sampling: shortest-path trees from 1 (left: a single spanning tree, the Opte look) up to 255 vantage ASes, then every link (right)"><span>Sampling</span><input id="sampling" type="range" min="0" max="100" value="0" /></label>
         <div class="hint" id="samplingLabel"></div>
-        <label class="row" title="Downsample to the core: hide the least-core nodes (by hierarchy level, then degree) and their links, leaving the core routes"><span>Core</span><input id="core" type="range" min="0" max="100" value="0" /></label>
+        <label class="row" title="Downsample to the core: keep the most-core nodes (by hierarchy level, then degree) and the links among them, from all nodes (left) to the top 0.5% (right)"><span>Core</span><input id="core" type="range" min="0" max="100" value="0" /></label>
         <div class="hint" id="coreLabel"></div>
         <label class="row"><span>Altitude</span><input id="altitude" type="range" min="0" max="100" value="20" /></label>
         <label class="check"><input id="showTransit" type="checkbox" checked /> <span id="transitLabel">transit links (provider→customer)</span></label>
