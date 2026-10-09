@@ -23,7 +23,7 @@ from pathlib import Path
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
-SOURCES = [HERE / "lgl.c", HERE / "paths.c", HERE / "splat.c"]
+SOURCES = [HERE / "lgl.c", HERE / "lgl_opte.c", HERE / "paths.c", HERE / "splat.c"]
 HEADERS = [HERE / "pool.h"]
 BASE_FLAGS = ["-O3", "-std=gnu11", "-ffast-math", "-fopenmp-simd", "-fPIC", "-shared", "-pthread"]
 ERRORS = {1: "out of memory", 2: "invalid arguments"}
@@ -95,6 +95,14 @@ def load():
         ctypes.c_uint64, ctypes.c_int32,
         ctypes.POINTER(ctypes.c_double),
     ]
+    lib.netmap_lgl_opte.restype = ctypes.c_int
+    lib.netmap_lgl_opte.argtypes = [
+        ctypes.c_int32, ctypes.c_int64,
+        ctypes.POINTER(ctypes.c_int32), ctypes.POINTER(ctypes.c_int32), ctypes.POINTER(ctypes.c_double),
+        ctypes.c_int32, ctypes.c_int32, ctypes.c_int32, ctypes.c_int32,
+        ctypes.c_uint64, ctypes.c_int32,
+        ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_int32),
+    ]
     lib.netmap_sample_rank.restype = ctypes.c_int
     lib.netmap_sample_rank.argtypes = [
         ctypes.c_int32, ctypes.c_int64,
@@ -144,6 +152,35 @@ def lgl(n: int, src, dst, root: int = 0, maxiter: int = 150, maxdelta: float = 0
     if rc != 0:
         raise RuntimeError(f"netmap_lgl failed: {ERRORS.get(rc, rc)}")
     return out
+
+
+def lgl_opte(n: int, src, dst, weights=None, root: int = -1, tree_only: bool = True,
+             leaves_close: int = 2, maxiter: int = 150, seed: int = 1,
+             threads: int | None = None, return_levels: bool = False):
+    """Opte-style LGL (port of lglayout, see lgl_opte.c); returns float64 [n, 2]
+    in lglayout units (neighbours ~1 apart), plus tree depths if asked.
+    ``weights``: lower = kept in the guiding tree (lglayout -O); default
+    prefers links between hubs. ``root=-1``: the tree median. ``leaves_close``:
+    0 off, 1 every family starts on its parent (lglayout -L as it behaves),
+    2 only families that are all leaves (-L as intended)."""
+    lib = load()
+    s = np.ascontiguousarray(src, dtype=np.int32)
+    d = np.ascontiguousarray(dst, dtype=np.int32)
+    w = None if weights is None else np.ascontiguousarray(weights, dtype=np.float64)
+    if w is not None and len(w) != len(s):
+        raise ValueError("one weight per edge")
+    out = np.empty((n, 2), dtype=np.float64)
+    lev = np.empty(n, dtype=np.int32)
+    i32p, f64p = ctypes.POINTER(ctypes.c_int32), ctypes.POINTER(ctypes.c_double)
+    rc = lib.netmap_lgl_opte(
+        n, len(s), s.ctypes.data_as(i32p), d.ctypes.data_as(i32p),
+        None if w is None else w.ctypes.data_as(f64p), root, int(tree_only), int(leaves_close),
+        maxiter, seed & (2**64 - 1), threads or cpu_count(), out.ctypes.data_as(f64p),
+        lev.ctypes.data_as(i32p),
+    )
+    if rc != 0:
+        raise RuntimeError(f"netmap_lgl_opte failed: {ERRORS.get(rc, rc)}")
+    return (out, lev) if return_levels else out
 
 
 def sample_rank(n: int, src, dst, roots, weights=None, threads: int | None = None) -> np.ndarray:

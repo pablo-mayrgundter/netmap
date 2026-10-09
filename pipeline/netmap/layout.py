@@ -89,7 +89,7 @@ def backbone(n: int, src, dst, rel, cone, level, core_level: float = 0.75) -> ig
     return ig.Graph(n=n, edges=e.tolist())
 
 
-def cyber(g: ig.Graph, algo: str = "lgl", seed: int = 1, root: int | None = None,
+def cyber(g: ig.Graph, algo: str = "opte", seed: int = 1, root: int | None = None,
           margin: float = 0.06) -> tuple[np.ndarray, np.ndarray]:
     """Graph-only layout mapped into the Mercator square."""
     t0 = time.time()
@@ -104,6 +104,16 @@ def cyber(g: ig.Graph, algo: str = "lgl", seed: int = 1, root: int | None = None
     random.seed(seed)  # igraph draws from Python's RNG: keep layouts reproducible
     r = int(np.argmax(sub.degree())) if root is None else root
     pts = None
+    if algo == "opte":
+        # Opte-style LGL (netmap/native/lgl_opte.c, a port of lglayout): the
+        # spanning tree laid out level by level, leaf families as stars.
+        try:
+            el = np.asarray(sub.get_edgelist(), np.int32).reshape(-1, 2)
+            pts = native.lgl_opte(sub.vcount(), el[:, 0], el[:, 1], root=-1 if root is None else root,
+                                  seed=seed)
+        except native.NativeUnavailable as exc:
+            print(f"  native LGL unavailable ({exc}); using igraph", file=sys.stderr)
+            algo = "lgl-igraph"
     if algo == "lgl":
         # Native parallel LGL (netmap/native/lgl.c); igraph's if no compiler.
         try:

@@ -295,6 +295,63 @@ def test_native_lgl_deterministic_and_sane():
     assert np.isfinite(c).all()
 
 
+def hub_and_spoke_graph(hubs=12, spokes=40, seed=0):
+    """A ring of hubs plus a few chords, each hub with its own spokes (leaves)."""
+    rng = np.random.default_rng(seed)
+    edges = [(h, (h + 1) % hubs) for h in range(hubs)]
+    edges += [tuple(rng.choice(hubs, 2, replace=False)) for _ in range(hubs // 3)]
+    n = hubs
+    for h in range(hubs):
+        for _ in range(spokes):
+            edges.append((h, n))
+            n += 1
+    el = np.asarray(edges, np.int32)
+    return n, el
+
+
+def spoke_quality(xy, n, el, hubs):
+    """(evenness, ownership): how evenly each hub's spokes surround it (1 =
+    perfectly, 0 = all on one side) and the share of spokes nearer their own
+    hub than any other hub."""
+    owner = np.full(n, -1)
+    owner[el[el[:, 0] < hubs][:, 1]] = el[el[:, 0] < hubs][:, 0]
+    leaf = owner >= 0
+    leaf[:hubs] = False
+    even = []
+    for h in range(hubs):
+        v = xy[leaf & (owner == h)] - xy[h]
+        u = v / np.maximum(np.hypot(*v.T), 1e-12)[:, None]
+        even.append(1 - np.hypot(*u.mean(0)))
+    d = np.hypot(xy[leaf, None, 0] - xy[None, :hubs, 0], xy[leaf, None, 1] - xy[None, :hubs, 1])
+    own = np.mean(d.argmin(1) == owner[leaf])
+    return float(np.mean(even)), float(own)
+
+
+def test_native_lgl_opte_hub_and_spoke():
+    """A hub-and-spoke topology must render as hub and spoke: each hub's
+    spokes all around it, nearer to it than to other hubs."""
+    from netmap import native
+
+    try:
+        native.load()
+    except native.NativeUnavailable:
+        pytest.skip("no C compiler")
+    hubs = 12
+    n, el = hub_and_spoke_graph(hubs)
+    a, lev = native.lgl_opte(n, el[:, 0], el[:, 1], seed=3, threads=1, return_levels=True)
+    b = native.lgl_opte(n, el[:, 0], el[:, 1], seed=3, threads=4)
+    assert np.isfinite(a).all() and np.array_equal(a, b)  # same for any thread count
+    assert lev.min() == 0 and lev.max() >= 2
+    even, own = spoke_quality(a, n, el, hubs)
+    assert even > 0.85 and own > 0.9, (even, own)
+    # Default lglayout mode (all edges, no leaves-close) still lays it out.
+    c = native.lgl_opte(n, el[:, 0], el[:, 1], tree_only=False, leaves_close=False, seed=3)
+    assert np.isfinite(c).all()
+    # Disconnected input: one tree per component, nothing rejected.
+    d = native.lgl_opte(4, np.array([0, 2], np.int32), np.array([1, 3], np.int32))
+    assert np.isfinite(d).all()
+
+
 def test_native_sample_rank_bfs_and_dijkstra():
     from netmap import native
 

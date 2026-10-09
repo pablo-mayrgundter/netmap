@@ -79,8 +79,31 @@ Parsing DB-IP adds about 20 s the first time only. Raster tiles render in a
 process pool with a C line splatter: a z0–5 layer takes about 16 s and z6–7
 about 90 s on 4 cores.
 
-**Native LGL** (`pipeline/netmap/native/lgl.c`) is a reimplementation of
-LGL (Adai et al. 2004) using igraph's scheme: BFS layers, placement around
+**Cyber layout: Opte's LGL** (`pipeline/netmap/native/lgl_opte.c`, the
+default, `--cyber opte`) ports the layout procedure of `lglayout` from
+[Opte's LGL](https://github.com/TheOpteProject/LGL) (Adai 2002–03, Lyon
+2004–22). A spanning tree that prefers links between hubs guides the layout.
+It's laid out level by level from the tree's median, and after each level a
+particle simulation runs (unit-range repulsion, edges as springs of rest
+length 0.5). Families of leaves start on their parent, so sparse parts become
+stars around their hub while dense parts mesh. It's checked against
+`lglayout` itself on the same graphs: built from source and run with Opte's
+settings (`-y -L`), the two agree on spread, edge-length distribution, how
+evenly spokes surround hubs, and radial density. One deliberate change:
+`lglayout -L`'s "are these all leaves?" test never succeeds, so it stacks
+every family on its parent. The port does what the flag says
+(`leaves_close=1` reproduces the original). It's multithreaded and
+deterministic: 25 s for the AS backbone and about 100 s for the 149k-PoP
+router map on 4 cores, versus 8.5 and 14 minutes for `lglayout`. A test
+requires a hub-and-spoke graph to render as hubs surrounded by their own
+spokes.
+
+This file is **GPL-2.0-or-later**, being derived from LGL; the rest of netmap
+is MIT. The compiled native library includes it, so builds that link it are
+GPL.
+
+**FR-style LGL** (`pipeline/netmap/native/lgl.c`, `--cyber lgl`) is a
+reimplementation of LGL (Adai et al. 2004) using igraph's scheme: BFS layers, placement around
 parents, grid-cutoff Fruchterman–Reingold, the same cooling. It's built for
 throughput:
 
@@ -94,7 +117,9 @@ throughput:
   count.
 
 On the real backbone it takes 11 s on one thread and 4.7 s on four,
-versus igraph's 103 s. Layout quality matches igraph's on the tests.
+versus igraph's 103 s. Layout quality matches igraph's on the tests, but
+like igraph's it throws a hub's spokes outward as one-sided rays rather than
+around the hub, which is why it is no longer the default.
 
 The other native kernels, all in `pipeline/netmap/native/`:
 
@@ -114,7 +139,7 @@ count and `NETMAP_LGL_PROFILE=1` prints a timing breakdown. `make
 netmap-lgl.mjs` in that directory builds a threaded WASM+SIMD module with
 emscripten, for in-browser layout later (not yet wired up).
 
-The cyber layout runs LGL on a **backbone**: each AS's primary
+The cyber layout of the AS map runs on a **backbone**: each AS's primary
 (largest-cone) provider link, plus the mesh among core ASes. Every link is
 still drawn. Laying out the full graph (`--cyber-graph full`) gives a
 featureless ball, because multihoming and peering tie everything together.
