@@ -116,6 +116,7 @@ const state = {
   waypoints: [], // node per search row (-1 while a row has no pick yet)
   active: 0, // the row double-clicks and picks fill
   expanded: true, // the active waypoint's card shown in full (and its links highlighted)
+  explore: null, // a node clicked to look at, outside the route (or null)
   hover: null,
 };
 
@@ -825,15 +826,16 @@ function networkLayers(globeView) {
   // Selection: the active waypoint's links, while its card is expanded. A big
   // network's hundreds of links would white out, so each dims with their
   // number; peering links are fainter than transit.
-  if (state.selected !== null && state.expanded) {
-    const nb = memo(`nb|${state.selected}`, () => G.neighbours(state.selected));
-    const sideOf = (d) => (G.edges[2 * d.edge] === state.selected ? 0 : 1);
+  const hl = state.explore ?? (state.expanded ? state.selected : null);
+  if (hl !== null) {
+    const nb = memo(`nb|${hl}`, () => G.neighbours(hl));
+    const sideOf = (d) => (G.edges[2 * d.edge] === hl ? 0 : 1);
     const dim = Math.min(1, Math.sqrt(40 / Math.max(nb.length, 1)));
     const aT = Math.max(28, 210 * dim);
     const aP = Math.max(14, 120 * dim);
     const selColor = (d) => (G.edge_rel[d.edge] !== 0 ? [255, 255, 255, aT] : [140, 220, 255, aP]);
     if (globeView) {
-      const data = memo(`sel-arcs|${state.selected}|${trig}`, () =>
+      const data = memo(`sel-arcs|${hl}|${trig}`, () =>
         buildArcs(nb.length, (k, a, b) => (endPos(nb[k].edge, sideOf(nb[k]), a), endPos(nb[k].edge, 1 - sideOf(nb[k]), b)), 0.05));
       layers.push(
         new PathLayer({
@@ -998,16 +1000,19 @@ function networkLayers(globeView) {
     );
   }
 
-  // A ring on each waypoint: white on the active one.
+  // A ring on each waypoint (white on the active one), and a cyan one on the
+  // node being explored.
   const marked = state.waypoints.map((w, k) => [w, k]).filter(([w]) => w >= 0);
+  if (state.explore !== null) marked.push([state.explore, -1]);
   if (marked.length) {
+    const ringColor = ([, k]) => (k < 0 ? [90, 220, 255, 255] : k === state.active && state.explore === null ? [255, 255, 255, 255] : [255, 213, 74, 255]);
     layers.push(
       new ScatterplotLayer({
         id: 'sel-node',
-        data: memo(`sel|${state.waypoints.join(',')}|${state.active}`, () => marked),
+        data: memo(`sel|${state.waypoints.join(',')}|${state.active}|${state.explore}`, () => marked),
         getPosition: ([i], { target }) => pos(i, target),
-        getRadius: ([, k]) => (k === state.active ? 9 : 7),
-        getLineColor: ([, k]) => (k === state.active ? [255, 255, 255, 255] : [255, 213, 74, 255]),
+        getRadius: ([, k]) => (k < 0 || k === state.active ? 10 : 7),
+        getLineColor: ringColor,
         radiusUnits: 'pixels',
         billboard: true,
         stroked: true,
@@ -1099,16 +1104,37 @@ function onHover(info) {
   }
 }
 
-function onClick() {
-  // Single clicks don't select (so panning never picks a node); double-click does.
+// Clicking explores: it shows a node's details and links without touching
+// the route. Clicking empty map stops exploring.
+function onClick(info) {
+  const picked = pickedNode(info);
+  if (picked !== null) explore(picked);
+  else if (!info.layer) explore(null);
 }
 
-// Double-click a node: it fills the active search row, like picking it there.
+// Double-click fills a search row only when the stack is asking for one: a
+// row just added with the control-point button, or the first search while
+// there's no route yet. Otherwise it explores, like a click.
 function onDoubleClick(info) {
   const picked = info ? pickedNode(info) : null;
   if (picked === null) return false;
-  setWaypoint(state.active, picked);
+  const filled = state.waypoints.filter((w) => w >= 0).length;
+  const waiting = state.waypoints.indexOf(-1);
+  if (waiting >= 0) setWaypoint(waiting, picked);
+  else if (filled <= 1) setWaypoint(0, picked);
+  else return explore(picked), true;
+  state.explore = null;
+  renderInfo();
+  render();
   return true;
+}
+
+function explore(node) {
+  if (node === state.explore) return;
+  state.explore = node;
+  render();
+  renderInfo();
+  if (node !== null) setWaypointInfo(node);
 }
 
 // --- waypoints -----------------------------------------------------------
@@ -1182,7 +1208,7 @@ async function setWaypointInfo(node) {
   const rec = await G.info(node);
   if (g !== G) return; // dataset changed meanwhile
   infoRecs.set(node, rec);
-  if (state.waypoints.includes(node)) renderInfo();
+  if (state.waypoints.includes(node) || state.explore === node) renderInfo();
 }
 
 function setActive(k, expanded = state.expanded) {
@@ -1242,13 +1268,21 @@ const segEnd = ([v, k], target) => (k === undefined ? pos(v, target) : endPos(k,
 function renderInfo() {
   const many = state.waypoints.filter((w) => w >= 0).length > 1;
   const cards = [];
+  const x = state.explore;
+  if (x !== null) {
+    const rec = infoRecs.get(x);
+    const body = rec ? detailsHTML(x, rec) : `<h2><span class="asn">AS${G.asn[x]}</span> ${esc(G.names[x])}</h2><p class="muted">loading…</p>`;
+    cards.push(`<section class="card wp full explore">
+      <button class="icon-btn wp-toggle wp-close" title="Stop exploring (Esc)" aria-label="Close">${ICONS.close}</button>
+      <p class="via explore-tag">Selected · ${whereOnRoute(x)}</p>${body}</section>`);
+  }
   state.waypoints.forEach((w, k) => {
     if (w < 0) return;
     const rec = infoRecs.get(w);
     const num = many ? `<span class="wp-num">${k + 1}</span>` : '';
     const via = viaHTML(k);
     const active = k === state.active ? ' active' : '';
-    if (k === state.active && state.expanded) {
+    if (k === state.active && state.expanded && x === null) {
       const body = rec ? detailsHTML(w, rec) : `<h2><span class="asn">AS${G.asn[w]}</span> ${esc(G.names[w])}</h2><p class="muted">loading…</p>`;
       cards.push(`<section class="card wp full${active}" data-k="${k}">
         <button class="icon-btn wp-toggle" title="Collapse" aria-label="Collapse">${ICONS.expand_less}</button>
@@ -1261,17 +1295,37 @@ function renderInfo() {
     }
   });
   $('infoCards').innerHTML = cards.join('');
-  $('infoCount').textContent = many ? `${cards.length} waypoints` : '';
+  const nwp = state.waypoints.filter((w) => w >= 0).length;
+  $('infoCount').textContent = nwp > 1 ? `${nwp} waypoints` : '';
   for (const card of $('infoCards').querySelectorAll('.wp.compact')) {
-    card.addEventListener('click', () => setActive(Number(card.dataset.k), true));
+    // opening a waypoint's card also stops exploring
+    card.addEventListener('click', () => {
+      state.explore = null;
+      state.active = Number(card.dataset.k);
+      state.expanded = true;
+      waypointsChanged();
+    });
   }
-  for (const btn of $('infoCards').querySelectorAll('.wp.full .wp-toggle')) {
+  for (const btn of $('infoCards').querySelectorAll('.wp.full:not(.explore) .wp-toggle')) {
     btn.addEventListener('click', () => setActive(state.active, false));
   }
+  $('infoCards').querySelector('.wp-close')?.addEventListener('click', () => explore(null));
+  // neighbours explore too: the route only changes from the search stack
   for (const li of $('infoCards').querySelectorAll('.wp.full .nbrs li')) {
-    li.addEventListener('click', () => setWaypoint(state.active, Number(li.dataset.i), { fly: true }));
+    li.addEventListener('click', () => {
+      const v = Number(li.dataset.i);
+      explore(v);
+      flyTo(v);
+    });
   }
   layoutCards();
+}
+
+// Where an explored node sits relative to the route.
+function whereOnRoute(v) {
+  const k = state.waypoints.indexOf(v);
+  if (k >= 0) return `waypoint ${k + 1}`;
+  return routes.some((r) => r && r.nodes.includes(v)) ? 'a hop on the route' : 'not on the route';
 }
 
 // How a waypoint is reached from the previous one.
@@ -1362,7 +1416,7 @@ function detailsHTML(i, r) {
 function layoutCards() {
   $('panel').hidden = !state.panelOpen;
   $('panelFab').hidden = state.panelOpen;
-  const sel = state.waypoints.some((w) => w >= 0);
+  const sel = state.waypoints.some((w) => w >= 0) || state.explore !== null;
   $('info').hidden = !(sel && state.detailsOpen);
   $('infoFab').hidden = !(sel && !state.detailsOpen);
   const narrow = window.innerWidth <= 720;
@@ -1606,6 +1660,10 @@ function writeHash() {
     h.set('at', String(state.active + 1)); // the active waypoint (1-based)
     h.set('open', state.expanded ? '1' : '0'); // its card expanded
   }
+  if (state.explore !== null && G) {
+    h.set('sel', G.asn[state.explore]); // the node being explored
+    if (G.meta.kind === 'routers') h.set('selpop', state.explore);
+  }
   history.replaceState(null, '', `#${h}`);
 }
 
@@ -1686,6 +1744,7 @@ function wireControls() {
     state.waypoints = [];
     state.active = 0;
     state.selected = null;
+    state.explore = null;
     pathEdges = [];
     routes = [];
     syncRows();
@@ -1719,8 +1778,12 @@ function wireControls() {
     } else if (e.key === 'g') {
       $('view').querySelector(`[data-v="${state.view === 'globe' ? 'map' : 'globe'}"]`).click();
     } else if (e.key === 'Escape') {
-      clearWaypoints();
-      openRow(0, false);
+      // first stop exploring, then clear the route
+      if (state.explore !== null) explore(null);
+      else {
+        clearWaypoints();
+        openRow(0, false);
+      }
     }
     else if (e.key === '/') {
       e.preventDefault();
@@ -1790,6 +1853,12 @@ async function load(id) {
     state.expanded = hash.get('open') !== '0';
     waypointsChanged();
     for (const v of nodes) setWaypointInfo(v);
+  }
+  const sel = Number(hash.get('sel'));
+  const selpop = Number(hash.get('selpop'));
+  if (hash.has('sel')) {
+    const v = hash.has('selpop') && G.asn[selpop] === sel ? selpop : G.byAsn.get(sel);
+    if (v !== undefined) explore(v);
   }
 }
 
