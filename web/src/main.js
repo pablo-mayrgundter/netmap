@@ -80,7 +80,7 @@ const hash = new URLSearchParams(location.hash.slice(1));
 // all of them (plus dataset, camera and selection), so a link reproduces the
 // view exactly even if these defaults change later.
 const PARAMS = [
-  ['mode', 'mode', ['cyber', 'hybrid', 'geo'], 'geo'],
+  ['morph', 'layout', 'num', 1], // 0 = cyber .. 0.5 = hybrid .. 1 = geo
   ['view', 'view', ['map', 'globe'], 'globe'],
   ['basemap', 'basemap', ['grid', 'osm', 'none'], 'grid'],
   ['renderer', 'renderer', ['vector', 'raster'], 'vector'],
@@ -115,6 +115,7 @@ function readParam([, key, type, def]) {
 const state = {
   dataset: hash.get('data') || params.get('data') || null,
   ...Object.fromEntries(PARAMS.map((p) => [p[0], readParam(p)])),
+  mode: 'geo', // derived from morph: cyber | hybrid | geo (visibility, PoPs, basemap, tiles)
   selected: null, // the active waypoint's node, or null
   waypoints: [], // node per search row (-1 while a row has no pick yet)
   active: 0, // the row double-clicks and picks fill
@@ -122,6 +123,11 @@ const state = {
   explore: null, // a node clicked to look at, outside the route (or null)
   hover: null,
 };
+
+// Older permalinks name a mode instead of a layout position.
+if (!hash.has('layout') && hash.has('mode')) state.morph = { cyber: 0, hybrid: 0.5, geo: 1 }[hash.get('mode')] ?? 1;
+const modeOf = (m) => (m < 0.06 ? 'cyber' : m > 0.94 ? 'geo' : 'hybrid');
+state.mode = modeOf(state.morph);
 
 let G = null; // loaded bundle
 let edgeColor = null; // Uint8Array E*4 (base colours, alpha applied in accessor)
@@ -214,9 +220,20 @@ function baseStyle() {
   return style;
 }
 
+// The basemap fades in from cyber (none) to hybrid and geo (full).
 function basemapOpacity() {
-  if (state.mode === 'cyber') return 0;
-  return state.basemap === 'osm' ? 0.75 : 1;
+  const f = Math.min(1, state.morph / 0.5);
+  return f * f * (3 - 2 * f) * (state.basemap === 'osm' ? 0.75 : 1);
+}
+
+function setMorph(m) {
+  state.morph = Math.max(0, Math.min(1, m));
+  const mode = modeOf(state.morph);
+  if (mode !== state.mode) {
+    state.mode = mode;
+    updateRaster(); // tiles exist for cyber, hybrid and geo
+  }
+  render();
 }
 
 function setBasemap(v) {
@@ -279,8 +296,8 @@ function buildColours() {
 // amount of "ink", so hundreds of thousands of trans-oceanic lines don't
 // saturate an 8-bit framebuffer and metro-scale structure stays visible.
 const lengthFactor = {};
-function edgeLengthFactor(mode) {
-  const key = `${mode}|${usePops()}`;
+function edgeLengthFactor(sec) {
+  const key = `${sec}|${usePops(sec)}`;
   if (lengthFactor[key]) return lengthFactor[key];
   const merc = (lon, lat) => {
     const s = Math.sin((Math.max(-85, Math.min(85, lat)) * Math.PI) / 180);
@@ -290,8 +307,8 @@ function edgeLengthFactor(mode) {
   const ta = [0, 0, 0];
   const tb = [0, 0, 0];
   for (let k = 0; k < G.e; k++) {
-    endPos(k, 0, ta, mode);
-    endPos(k, 1, tb, mode);
+    endPos(k, 0, ta, sec);
+    endPos(k, 1, tb, sec);
     const [x0, y0] = merc(ta[0], ta[1]);
     const [x1, y1] = merc(tb[0], tb[1]);
     const len = Math.hypot(x1 - x0, y1 - y0);
@@ -326,8 +343,15 @@ function altitude(i) {
   return Math.pow(l, 1.5) * ALT_MAX_M * state.altitude * 2;
 }
 
-function pos(i, target, mode = state.mode) {
-  const p = G[`pos_${mode}`];
+// The cyber -> geo slider walks the bundle's morph stops (pipeline
+// layout.morph): the section for the current one.
+function layoutSec(m = state.morph) {
+  const stops = G?.meta.morph || ['pos_cyber', 'pos_hybrid', 'pos_geo'];
+  return stops[Math.round(m * (stops.length - 1))];
+}
+
+function pos(i, target, sec = layoutSec()) {
+  const p = G[sec];
   target[0] = p[2 * i];
   target[1] = p[2 * i + 1];
   target[2] = altitude(i);
@@ -338,7 +362,7 @@ function pos(i, target, mode = state.mode) {
 // cities their address space lives in. Each link end may attach to a PoP
 // instead of the AS's single position, and each PoP'd AS has core routes
 // (a spanning tree) between its PoPs.
-const usePops = (mode = state.mode) => state.pops && mode !== 'cyber' && !!G?.pop_pos;
+const usePops = (sec = layoutSec()) => state.pops && sec !== 'pos_cyber' && !!G?.pop_pos;
 const hasPops = (i) => !!G.pop_offset && G.pop_offset[i + 1] > G.pop_offset[i];
 
 function popPos(p, target) {
@@ -348,12 +372,12 @@ function popPos(p, target) {
   return target;
 }
 
-function endPos(k, side, target, mode = state.mode) {
-  if (usePops(mode)) {
+function endPos(k, side, target, sec = layoutSec()) {
+  if (usePops(sec)) {
     const p = G.edge_pop[2 * k + side];
     if (p >= 0) return popPos(p, target);
   }
-  return pos(G.edges[2 * k + side], target, mode);
+  return pos(G.edges[2 * k + side], target, sec);
 }
 
 // --- globe arcs ----------------------------------------------------------
@@ -451,7 +475,7 @@ function fiberCellSize() {
 let fiberCache = { key: null, value: null };
 function computeFibers() {
   const K = sampleK();
-  const key = `${state.mode}|${usePops()}|${state.fiberCell}|${K}|${state.core}|${state.showTransit}|${state.showPeering}|${state.backboneOnly}|${state.view}|${state.altitude}`;
+  const key = `${layoutSec()}|${state.mode}|${usePops()}|${state.fiberCell}|${K}|${state.core}|${state.showTransit}|${state.showPeering}|${state.backboneOnly}|${state.view}|${state.altitude}`;
   if (fiberCache.key === key) return fiberCache.value;
   const cell = fiberCellSize();
   const inv = 1 / cell;
@@ -462,7 +486,7 @@ function computeFibers() {
   };
   const a = [0, 0, 0];
   const b = [0, 0, 0];
-  const lf = edgeLengthFactor(state.mode);
+  const lf = edgeLengthFactor(layoutSec());
   const cut = coreCut();
   const index = new Map();
   const edgeBundle = new Int32Array(G.e).fill(-1);
@@ -709,9 +733,9 @@ const showVectorsFor = (globeView) => state.renderer === 'vector' || globeView;
 
 function networkLayers(globeView) {
   if (!G) return [];
-  const trig = `${state.mode}|${state.view}|${state.altitude}|${usePops()}`;
+  const trig = `${layoutSec()}|${state.view}|${state.altitude}|${usePops()}`;
   const opacity = edgeOpacity(globeView);
-  const lf = edgeLengthFactor(state.mode);
+  const lf = edgeLengthFactor(layoutSec());
   const fib = state.fibers && showVectorsFor(globeView) ? computeFibers() : null;
   const hidden = fib ? fib.hidden : null;
   const colourTrig = `${state.mode}|${state.showTransit}|${state.showPeering}|${state.backboneOnly}|${usePops()}|${state.fibers ? fiberCache.key ?? 'f' : ''}`;
@@ -1206,7 +1230,7 @@ function setWaypoint(k, node, { fly = false } = {}) {
 
 // Frame every waypoint and the route between them.
 function flyToRoute() {
-  const p = G[`pos_${state.mode}`];
+  const p = G[layoutSec()];
   const nodes = new Set(state.waypoints.filter((w) => w >= 0));
   for (const r of routes) if (r) for (const v of r.nodes) nodes.add(v);
   if (state.view === 'globe' || nodes.size < 2) return flyTo(state.selected);
@@ -1364,7 +1388,7 @@ function viaHTML(k) {
 }
 
 function flyTo(i) {
-  const p = G[`pos_${state.mode}`];
+  const p = G[layoutSec()];
   const lon = p[2 * i];
   const lat = p[2 * i + 1];
   if (state.view === 'globe') {
@@ -1734,6 +1758,10 @@ function syncControls() {
     ? `~${Math.round(fiberCellSize() * 40075)} km cells · ${fmt(fib.fibers.length)} fibers carrying ${fmt(fib.bundled)} links`
     : '';
   for (const b of $('mode').children) b.classList.toggle('on', b.dataset.v === state.mode);
+  const nStops = (G?.meta.morph || [0, 0, 0]).length;
+  $('morph').step = String(100 / (nStops - 1));
+  $('morph').value = String(Math.round(state.morph * 100));
+  $('morphLabel').textContent = `${state.mode}${state.mode === 'hybrid' ? ` · ${Math.round(state.morph * 100)}% geo` : ''}`;
   for (const b of $('view').children) b.classList.toggle('on', b.dataset.v === state.view);
   $('basemap').value = state.basemap;
   $('basemap').disabled = state.view === 'globe';
@@ -1794,12 +1822,10 @@ function applyControls() {
 }
 
 function wireControls() {
+  $('morph').addEventListener('input', (e) => setMorph(Number(e.target.value) / 100));
   $('mode').addEventListener('click', (e) => {
     const v = e.target.dataset?.v;
-    if (!v) return;
-    state.mode = v;
-    updateRaster();
-    render();
+    if (v) setMorph({ cyber: 0, hybrid: 0.5, geo: 1 }[v]);
   });
   $('view').addEventListener('click', (e) => {
     const v = e.target.dataset?.v;
@@ -1880,12 +1906,9 @@ function wireControls() {
   wireFlightKeys();
   window.addEventListener('keydown', (e) => {
     if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
-    const modes = { 1: 'cyber', 2: 'hybrid', 3: 'geo' };
-    if (modes[e.key]) {
-      state.mode = modes[e.key];
-      updateRaster();
-      render();
-    } else if (e.key === 'g') {
+    const stops = { 1: 0, 2: 0.5, 3: 1 };
+    if (stops[e.key] !== undefined) setMorph(stops[e.key]);
+    else if (e.key === 'g') {
       $('view').querySelector(`[data-v="${state.view === 'globe' ? 'map' : 'globe'}"]`).click();
     } else if (e.key === 'Escape') {
       // first stop exploring, then clear the route
@@ -2079,7 +2102,7 @@ window.netmap = {
   deck: () => (state.view === 'globe' ? globe : overlay._deck),
   // screen position of node i on the 2D map (UI tests)
   project: (i) => {
-    const p = G[`pos_${state.mode}`];
+    const p = G[layoutSec()];
     const { x, y } = map.project([p[2 * i], p[2 * i + 1]]);
     return { x, y };
   },

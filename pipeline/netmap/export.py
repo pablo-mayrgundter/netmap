@@ -25,7 +25,11 @@ FORMAT_VERSION = 1
 def write_bundle(out: Path, *, name: str, topo, metrics, prof_rows, layouts, region_idx,
                  has_geo, pinned, names, info_records, attribution: list[str],
                  backbone=None, sample_rank=None, pops=None, edge_weight=None,
-                 kind: str = "as"):
+                 kind: str = "as", morph=None):
+    """``morph``: optional list of (lon, lat) layouts from cyber to geo (see
+    layout.morph); the first, middle and last are the cyber, hybrid and geo
+    layouts, the rest are written as pos_m<k>, and meta["morph"] lists the
+    section for each stop."""
     out.mkdir(parents=True, exist_ok=True)
     n, e = topo.n, topo.e
     flags = has_geo.astype(np.uint8) | (pinned.astype(np.uint8) << 1)
@@ -48,6 +52,15 @@ def write_bundle(out: Path, *, name: str, topo, metrics, prof_rows, layouts, reg
         ("edge_rank", (np.zeros(e) if sample_rank is None else sample_rank).astype(np.uint8), [e]),
         ("edge_backbone", (np.ones(e, bool) if backbone is None else backbone).astype(np.uint8), [e]),
     ]
+    morph_names = None
+    if morph is not None:
+        mid = (len(morph) - 1) // 2
+        morph_names = []
+        for k, ll in enumerate(morph):
+            name_k = "pos_cyber" if k == 0 else "pos_geo" if k == len(morph) - 1 else "pos_hybrid" if k == mid else f"pos_m{k}"
+            if name_k.startswith("pos_m"):
+                sections.append((name_k, lonlat(ll), [n, 2]))
+            morph_names.append(name_k)
     if edge_weight is not None:
         sections.append(("edge_weight", np.asarray(edge_weight).astype(np.uint32), [e]))
     if pops is not None:
@@ -89,6 +102,7 @@ def write_bundle(out: Path, *, name: str, topo, metrics, prof_rows, layouts, reg
             "routes": 0 if pops is None else len(pops[0].routes),
         },
         "modes": ["cyber", "geo", "hybrid"],
+        "morph": morph_names or ["pos_cyber", "pos_hybrid", "pos_geo"],  # cyber -> geo stops
         "regions": [{"id": r, "name": REGION_NAMES[r], "rgb": PALETTE[r]} for r in REGIONS],
         "info_chunk": INFO_CHUNK,
         "sections": table,

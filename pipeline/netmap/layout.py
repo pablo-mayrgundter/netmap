@@ -191,78 +191,64 @@ def geo(lat, lon, has_geo, weight):
     return sunflower(lon, lat, weight, has_geo)
 
 
-# --- hybrid ----------------------------------------------------------------
+# --- morph: cyber -> geo ----------------------------------------------------
 
-def hybrid(g: ig.Graph, lat, lon, pinned, cyber_lonlat, fr_iters: int = 0,
-           local_shape: float = 0.25, world_units: float = 20000.0, seed: int = 1):
-    """Pinned nodes at (lon, lat); the rest by harmonic embedding.
+def morph(n: int, src, dst, cyber_ll, geo_ll, pin_w, stops: int = 9, km: float = 250.0,
+          lam_mid: float = 0.1) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Layouts from cyber (stop 0) to geo (the last stop), deforming the cyber
+    layout rather than rebuilding from geography, so local structure (a hub
+    and its spokes) survives as it moves next to its points of presence.
 
-    Free nodes that share neighbourhoods would land on the same point, so each
-    is offset by ``local_shape`` times its displacement from its neighbours'
-    centroid in the cyber layout: the LGL's local structure, transplanted.
-    ``fr_iters`` > 0 adds a (slow, igraph) Fruchterman-Reingold relaxation.
+    Each stop solves a least-squares (Laplacian) deformation over the layout
+    graph's links (src, dst):
+
+        min  sum_ij w_ij |(x_i - x_j) - s (c_i - c_j)|^2 + lam sum_i pin_i |x_i - g_i|^2
+
+    c is the cyber layout, g the geo one, pin_i in [0, 1] how much a node's
+    geolocation is trusted. Along the way the cyber shape shrinks (s goes
+    from 1 to a scale where a typical link is ``km`` long) and the geo pins
+    strengthen (lam_mid at the halfway stop, the hybrid); links between hubs
+    loosen first, so the backbone stretches across geography while small
+    families keep their form. Returns (lon, lat) per stop.
     """
     t0 = time.time()
-    n = g.vcount()
-    px, py = lonlat_to_merc(lon, lat)
-    cx, cy = lonlat_to_merc(*cyber_lonlat)
-    el = np.asarray(g.get_edgelist(), np.int64)
-    A = sp.coo_matrix((np.ones(len(el)), (el[:, 0], el[:, 1])), shape=(n, n))
-    A = (A + A.T).tocsr()
-    A.data[:] = 1.0
-    deg = np.asarray(A.sum(1)).ravel()
+    C = np.stack(lonlat_to_merc(*cyber_ll), 1).astype(np.float64)
+    Gm = np.stack(lonlat_to_merc(*geo_ll), 1).astype(np.float64)
+    src = np.asarray(src, np.int64)
+    dst = np.asarray(dst, np.int64)
+    pin = np.clip(np.asarray(pin_w, np.float64), 0, 1)
+    deg = np.bincount(np.concatenate([src, dst]), minlength=n)
+    family = np.minimum(deg[src], deg[dst]) <= 2  # a link inside a small family
+    el = np.hypot(*(C[src] - C[dst]).T)
+    s_min = (km / 40075.0) / max(float(np.median(el[el > 0])) if (el > 0).any() else 1.0, 1e-12)
+    out = [tuple(cyber_ll)]
+    prev = C
+    for k in range(1, stops - 1):
+        t = k / (stops - 1)
+        u = min(1.0, t / 0.5)
+        s = float(np.exp(np.log(s_min) * u))  # 1 -> s_min by the halfway stop
+        lam = lam_mid * (t / (1 - t)) ** 2  # lam_mid at the halfway stop
+        w = np.where(family, 1.0, 1.0 + (0.02 - 1.0) * u)
+        A = sp.coo_matrix((w, (src, dst)), shape=(n, n))
+        A = (A + A.T).tocsr()
+        Lap = (sp.diags(np.asarray(A.sum(1)).ravel()) - A).tocsr()
+        pw = lam * pin + 1e-6  # a whisper of anchoring keeps islands well-posed
+        anchor = np.where(pin[:, None] > 0, Gm, 0.5 + (C - 0.5) * s)
+        M = (Lap + sp.diags(pw)).tocsr()
+        X = np.empty_like(C)
+        for d in range(2):
+            b = s * (Lap @ C[:, d]) + pw * anchor[:, d]
+            X[:, d], _ = spla.cg(M, b, x0=prev[:, d], rtol=1e-8, maxiter=3000)
+        X = np.clip(X, 0.001, 0.999)
+        out.append(merc_to_lonlat(X[:, 0], X[:, 1]))
+        prev = X
+    # the last stop is geo; nodes without a location stay where the previous stop put them
+    glon, glat = (np.asarray(v, np.float64).copy() for v in geo_ll)
+    plon, plat = out[-1]
+    nogeo = pin <= 0
+    glon[nogeo], glat[nogeo] = np.asarray(plon)[nogeo], np.asarray(plat)[nogeo]
+    out.append((glon, glat))
+    _log(f"cyber->geo morph, {stops} stops (pinned {int((pin > 0).sum())}, typical link {km:.0f} km at hybrid)", t0)
+    return out
 
-    U = np.flatnonzero(~pinned)
-    P = np.flatnonzero(pinned)
-    x = np.where(pinned, px, 0.0)
-    y = np.where(pinned, py, 0.0)
-    if len(U):
-        # (D_uu - A_uu + eps) x_u = A_up x_p + eps * x_cyber
-        # eps keeps islands with no pinned neighbour well-posed: they settle
-        # near the middle of the world, keeping their cyber shape.
-        eps = 1e-3
-        Auu = A[U][:, U]
-        Aup = A[U][:, P]
-        L = sp.diags(deg[U] + eps) - Auu
-        # Islands relax to a scaled copy of their cyber position around the
-        # centre of the map.
-        fx = 0.5 + (cx[U] - 0.5) * 0.35
-        fy = 0.5 + (cy[U] - 0.5) * 0.35
-        bx = Aup @ px[P] + eps * fx
-        by = Aup @ py[P] + eps * fy
-        x[U], _ = spla.cg(L, bx, x0=fx, rtol=1e-8, maxiter=2000)
-        y[U], _ = spla.cg(L, by, x0=fy, rtol=1e-8, maxiter=2000)
-    _log(f"hybrid harmonic embedding ({len(P)} pinned, {len(U)} free)", t0)
 
-    if local_shape > 0 and len(U):
-        with np.errstate(invalid="ignore", divide="ignore"):
-            mcx = np.asarray(A @ cx).ravel() / deg
-            mcy = np.asarray(A @ cy).ravel() / deg
-        dx = np.nan_to_num(cx - mcx)[U]
-        dy = np.nan_to_num(cy - mcy)[U]
-        x[U] += local_shape * dx
-        y[U] += local_shape * dy
-
-    if fr_iters > 0 and len(U):
-        # Relax: separate stacked leaves, keep pinned nodes fixed.
-        rng = np.random.default_rng(seed)
-        X = np.stack([x, y], 1) * world_units
-        X[U] += rng.normal(0, 0.5, (len(U), 2))
-        minx = X[:, 0].copy()
-        maxx = X[:, 0].copy()
-        miny = X[:, 1].copy()
-        maxy = X[:, 1].copy()
-        big = world_units * 2
-        minx[U], maxx[U], miny[U], maxy[U] = -big, big, -big, big
-        lay = g.layout_fruchterman_reingold(
-            seed=X.tolist(), niter=fr_iters, start_temp=world_units * 0.002,
-            minx=minx.tolist(), maxx=maxx.tolist(), miny=miny.tolist(), maxy=maxy.tolist(),
-            grid=True,
-        )
-        X2 = np.asarray(lay.coords) / world_units
-        x[U], y[U] = X2[U, 0], X2[U, 1]
-        _log("hybrid FR relaxation", t0)
-
-    x = np.clip(x, 0.001, 0.999)
-    y = np.clip(y, 0.001, 0.999)
-    return merc_to_lonlat(x, y)

@@ -27,14 +27,19 @@
         <select id="dataset"></select>
       </label>
 
-      <div class="group" role="radiogroup" aria-label="Layout">
+      <div class="group layout-group">
         <span class="label">Layout</span>
-        <div class="seg" id="mode">
-          <button data-v="cyber" title="Large Graph Layout: pure topology (1)">Cyber</button>
-          <button data-v="hybrid" title="Metro-concentrated ASes pinned, core placed by the graph (2)">Hybrid</button>
-          <button data-v="geo" title="Every geolocated AS at its main site (3)">Geo</button>
+        <div class="morph">
+          <input id="morph" type="range" min="0" max="100" step="12.5" value="100" aria-label="Layout, from cyber to geo"
+            title="From cyber (the graph's own layout) to geo (where networks are); hybrid is halfway. Keys 1, 2, 3." />
+          <div class="ticks" id="mode">
+            <button data-v="cyber" title="Large Graph Layout: pure topology (1)">Cyber</button>
+            <button data-v="hybrid" title="The cyber layout moved onto the map: families keep their shape next to their PoPs (2)">Hybrid</button>
+            <button data-v="geo" title="Every geolocated network at its main site (3)">Geo</button>
+          </div>
         </div>
       </div>
+      <div class="hint" id="morphLabel"></div>
 
       <div class="group">
         <span class="label">View</span>
