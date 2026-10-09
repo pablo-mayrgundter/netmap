@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>netmap — maps of cyberspace</title>
+    <title>netmap</title>
     <link rel="stylesheet" href="./src/style.css" />
   </head>
   <body>
@@ -17,7 +17,7 @@
       <header>
         <i class="icon" data-icon="hub"></i>
         <h1>netmap</h1>
-        <span class="sub">maps of cyberspace</span>
+        <span class="sub">of cyberspace</span>
         <button id="panelMin" class="icon-btn" data-icon="expand_less" title="Minimize" aria-label="Minimize controls"></button>
       </header>
       <div id="banner" hidden></div>
@@ -94,7 +94,26 @@
           <ul class="results" role="listbox"></ul>
         </div>
       </div>
-      <button id="addWaypoint" class="icon-btn" data-icon="control_point" title="Add a waypoint: route from the last search to another node" aria-label="Add waypoint" disabled></button>
+      <div class="stack-tools">
+        <button id="addWaypoint" class="icon-btn" data-icon="control_point" title="Add a waypoint: route from the last search to another node" aria-label="Add waypoint" disabled></button>
+        <button id="traceBtn" class="icon-btn" data-icon="upload" title="Import a traceroute" aria-label="Import a traceroute" aria-expanded="false"></button>
+      </div>
+      <section id="tracePanel" class="card" hidden>
+        <h2>Import a traceroute</h2>
+        <p class="muted">Paste the output of <code>traceroute</code>, <code>tracert</code> (Windows) or <code>mtr --report</code>.
+          Each hop's address is matched to its network (RouteViews prefixes); private and silent hops are skipped,
+          and the networks that resolve become the route.</p>
+        <textarea id="traceText" rows="9" spellcheck="false" placeholder="traceroute to 8.8.8.8 (8.8.8.8), 64 hops max
+ 1  192.168.86.1 (192.168.86.1)  6.475 ms
+ …
+ 9  dns.google (8.8.8.8)  13.786 ms"></textarea>
+        <ol id="traceHops"></ol>
+        <div class="actions">
+          <span id="traceSummary" class="muted"></span>
+          <button id="traceCancel" class="btn">Cancel</button>
+          <button id="traceUse" class="btn primary" disabled>Use as route</button>
+        </div>
+      </section>
     </div>
     </div>
 

@@ -170,7 +170,22 @@ def cmd_build(args):
         info_records=info, attribution=attribution,
     )
     _update_index(Path(args.out))
+    _write_lookups(Path(args.out), pfx, cache)
     _step(f"done in {time.time() - t0:.0f}s: {meta['counts']}")
+
+
+def _write_lookups(root: Path, pfx, cache: Path):
+    """IP->AS and airport tables the viewer uses to resolve pasted traceroutes."""
+    from . import iata, lookups
+
+    n = lookups.write_ip2asn(root / "ip2asn.bin.gz", pfx)
+    msg = f"{n} IP->AS boundaries"
+    try:
+        air = sources.fetch_npm(cache, "airports")["dist/airports.json"]
+        msg += f", {lookups.write_iata(root / 'iata.json', iata.Gazetteer.from_openflights(air))} airports"
+    except Exception as exc:  # optional: traces still resolve, just without city hints
+        msg += f" (no airports: {exc})"
+    _step(f"lookup tables: {msg}")
 
 
 def cmd_build_itdk(args):

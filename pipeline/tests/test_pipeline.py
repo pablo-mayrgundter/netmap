@@ -423,3 +423,31 @@ def test_itdk_aggregate_to_pops(tmp_path):
     assert len(p["pop_asn"]) == 0  # the only 2-router PoP has no remaining links
     mask = itdk.max_spanning_forest(3, agg["src"], agg["dst"], agg["weight"])
     assert mask.all()  # a tree already
+
+
+def test_ip2asn_boundaries_and_file(tmp_path):
+    """The viewer's IP->AS table: gaps are AS 0, nested ranges keep the outer
+    one, neighbours of the same AS merge, and the file round-trips."""
+    import gzip
+
+    from netmap import lookups
+    from netmap.geo import PrefixTable
+
+    pfx = PrefixTable(
+        np.array([100, 200, 210, 300, 400], np.uint32),
+        np.array([199, 299, 220, 349, 499], np.uint32),
+        np.array([7, 7, 9, 8, 7], np.uint32),
+        {},
+    )
+    st, an = lookups.ip2asn_boundaries(pfx)
+    look = lambda ip: lookups.lookup(st, an, ip)  # noqa: E731
+    assert [look(ip) for ip in (0, 99, 100, 250, 215, 299, 300, 349, 350, 450, 500, 2**32 - 1)] == [
+        0, 0, 7, 7, 7, 7, 8, 8, 0, 7, 0, 0,
+    ]
+    assert list(an[:3]) == [0, 7, 8]  # 100-299 is one run of AS 7
+    path = tmp_path / "ip2asn.bin.gz"
+    n = lookups.write_ip2asn(path, pfx)
+    raw = gzip.decompress(path.read_bytes())
+    assert raw[:4] == b"NMIP" and int.from_bytes(raw[8:12], "little") == n == len(st)
+    assert np.array_equal(np.frombuffer(raw, "<u4", n, 12), st)
+    assert np.array_equal(np.frombuffer(raw, "<u4", n, 12 + 4 * n), an)

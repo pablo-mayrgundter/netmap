@@ -9,6 +9,7 @@ import countries110 from 'world-atlas/countries-110m.json';
 
 import { listDatasets, loadBundle } from './data.js';
 import { route } from './route.js';
+import { parseTrace, loadLookups, resolveTrace, ipText } from './trace.js';
 
 // Material Icons (Apache-2.0), the same glyphs as MUI's icons, inlined as SVG.
 import hubIcon from '@material-design-icons/svg/filled/hub.svg?raw';
@@ -18,12 +19,14 @@ import searchIcon from '@material-design-icons/svg/filled/search.svg?raw';
 import controlPointIcon from '@material-design-icons/svg/filled/control_point.svg?raw';
 import closeIcon from '@material-design-icons/svg/filled/close.svg?raw';
 import expandMoreIcon from '@material-design-icons/svg/filled/expand_more.svg?raw';
+import uploadIcon from '@material-design-icons/svg/filled/upload.svg?raw';
 
 const ICONS = {
   hub: hubIcon,
   format_list_bulleted: listIcon,
   expand_less: expandLessIcon,
   expand_more: expandMoreIcon,
+  upload: uploadIcon,
   search: searchIcon,
   control_point: controlPointIcon,
   close: closeIcon,
@@ -77,7 +80,7 @@ const hash = new URLSearchParams(location.hash.slice(1));
 // all of them (plus dataset, camera and selection), so a link reproduces the
 // view exactly even if these defaults change later.
 const PARAMS = [
-  ['mode', 'mode', ['cyber', 'hybrid', 'geo'], 'hybrid'],
+  ['mode', 'mode', ['cyber', 'hybrid', 'geo'], 'geo'],
   ['view', 'view', ['map', 'globe'], 'globe'],
   ['basemap', 'basemap', ['grid', 'osm', 'none'], 'grid'],
   ['renderer', 'renderer', ['vector', 'raster'], 'vector'],
@@ -137,6 +140,9 @@ const map = new maplibregl.Map({
   style: baseStyle(),
   center: [Number(hash.get('lon') ?? 10), Number(hash.get('lat') ?? 25)],
   zoom: Number(hash.get('z') ?? 1.6),
+  pitch: Number(hash.get('pitch') ?? 0),
+  bearing: Number(hash.get('bearing') ?? 0),
+  maxPitch: 85,
   renderWorldCopies: false,
   attributionControl: { compact: true },
   maxZoom: 16,
@@ -147,7 +153,9 @@ const map = new maplibregl.Map({
   transformConstrain: (lngLat, zoom) => constrainView(lngLat, zoom),
 });
 mapRef = map;
-map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
+// The compass shows (and resets, on click) the rotation and pitch the arrow keys set.
+map.addControl(new maplibregl.NavigationControl({ showCompass: true, visualizePitch: true }), 'bottom-right');
+map.keyboard.disable(); // our own keys below: arrows tilt and rotate, WASD fly
 
 const crosshair = ({ isDragging }) => (isDragging ? 'grabbing' : 'crosshair');
 const overlay = new MapboxOverlay({ interleaved: false, layers: [], getTooltip: null, getCursor: crosshair });
@@ -1069,7 +1077,20 @@ function render() {
     if (map.getLayer('base')) map.setPaintProperty('base', 'raster-opacity', basemapOpacity());
   }
   syncControls();
+  updateTitle();
   writeHashSoon(); // browsers throttle history.replaceState; never per frame
+}
+
+// Tab title: what's targeted (the explored node, else the route or search),
+// or the layout when nothing is.
+function updateTitle() {
+  const name = (i) => G.names[i] || `AS${G.asn[i]}`;
+  const wps = G ? state.waypoints.filter((w) => w >= 0) : [];
+  let what = state.mode;
+  if (G && state.explore !== null) what = name(state.explore);
+  else if (wps.length === 1) what = name(wps[0]);
+  else if (wps.length > 1) what = [name(wps[0]), ...(wps.length > 2 ? ['…'] : []), name(wps[wps.length - 1])].join(' → ');
+  document.title = `netmap - ${what}`;
 }
 
 // --- interaction ---------------------------------------------------------
@@ -1526,7 +1547,7 @@ function syncRows() {
   while (rows.length > want) rows.pop().remove();
   while (rows.length < want) {
     const row = makeRow(rows.length);
-    stack.insertBefore(row, add);
+    stack.insertBefore(row, stack.querySelector('.stack-tools'));
     wireRow(row);
     rows.push(row);
   }
@@ -1607,6 +1628,90 @@ function wireRow(row) {
   row.querySelector('.remove')?.addEventListener('click', () => removeWaypoint(kOf()));
 }
 
+// --- traceroute import ---------------------------------------------------
+// The upload button next to the control point opens a paste box; hops that
+// resolve to networks on this map replace the search stack as waypoints.
+
+let traceResult = null;
+function openTrace(open) {
+  $('tracePanel').hidden = !open;
+  $('traceBtn').setAttribute('aria-expanded', String(open));
+  if (open) {
+    $('traceText').focus();
+    loadLookups(DATA_BASE).catch(() => {}); // start the download early
+  }
+}
+
+async function updateTrace() {
+  const hops = parseTrace($('traceText').value);
+  const list = $('traceHops');
+  const use = $('traceUse');
+  use.disabled = true;
+  traceResult = null;
+  if (!hops.length) {
+    list.innerHTML = '';
+    $('traceSummary').textContent = $('traceText').value.trim() ? 'no hops found' : '';
+    return;
+  }
+  $('traceSummary').textContent = 'loading the network table…';
+  let L;
+  try {
+    L = await loadLookups(DATA_BASE);
+  } catch (err) {
+    $('traceSummary').textContent = `couldn't load the network table (${err.message})`;
+    return;
+  }
+  if (!G) return;
+  const r = resolveTrace(hops, L, G);
+  const why = { timeout: 'no reply', private: 'private address', unrouted: 'not routed in BGP', nameonly: 'name only: rerun with mtr -b or -n' };
+  list.innerHTML = r.rows
+    .map((h) => {
+      const ip = h.ip === null ? '*' : ipText(h.ip);
+      const hint = h.hint ? `<span class="hint">· ${h.hint.code} ${esc(h.hint.name)}</span>` : '';
+      const what =
+        h.status === 'ok'
+          ? `<span class="asn">AS${h.asn}</span>${esc(G.names[h.node])}${hint}`
+          : h.status === 'missing'
+            ? `<span class="asn">AS${h.asn}</span>not on this map${hint}`
+            : why[h.status];
+      return `<li class="${h.status === 'ok' ? 'ok' : 'skip'}" title="${esc(h.host || ip)}"><span class="n">${h.hop}</span><span class="ip">${ip}</span><span class="what">${what}</span></li>`;
+    })
+    .join('');
+  const ok = r.rows.filter((h) => h.status === 'ok').length;
+  $('traceSummary').textContent = `${ok} of ${r.rows.length} hops resolved → ${r.waypoints.length} waypoint${r.waypoints.length === 1 ? '' : 's'}`;
+  traceResult = r;
+  use.disabled = !r.waypoints.length;
+}
+
+function useTrace() {
+  if (!traceResult?.waypoints.length) return;
+  state.waypoints = traceResult.waypoints.slice();
+  state.active = state.waypoints.length - 1;
+  state.expanded = true;
+  state.explore = null;
+  waypointsChanged();
+  for (const v of state.waypoints) setWaypointInfo(v);
+  flyToRoute();
+  openTrace(false);
+}
+
+function wireTrace() {
+  let timer = null;
+  $('traceBtn').addEventListener('click', () => openTrace($('tracePanel').hidden));
+  $('traceCancel').addEventListener('click', () => openTrace(false));
+  $('traceUse').addEventListener('click', useTrace);
+  $('traceText').addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(updateTrace, 200);
+  });
+  $('traceText').addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      openTrace(false);
+    } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) useTrace();
+  });
+}
+
 function wireSearch() {
   const row0 = rowEl(0);
   wireRow(row0);
@@ -1616,6 +1721,7 @@ function wireSearch() {
     else openRow(0, true);
   });
   $('addWaypoint').addEventListener('click', addWaypoint);
+  wireTrace();
 }
 
 // --- controls ------------------------------------------------------------
@@ -1652,6 +1758,8 @@ function writeHash() {
     h.set('lon', c.lng.toFixed(3));
     h.set('lat', c.lat.toFixed(3));
     h.set('z', map.getZoom().toFixed(2));
+    if (map.getPitch()) h.set('pitch', map.getPitch().toFixed(1));
+    if (map.getBearing()) h.set('bearing', map.getBearing().toFixed(1));
   }
   const wps = state.waypoints.filter((w) => w >= 0);
   if (wps.length && G) {
@@ -1745,6 +1853,7 @@ function wireControls() {
     state.active = 0;
     state.selected = null;
     state.explore = null;
+    traceResult = null;
     pathEdges = [];
     routes = [];
     syncRows();
@@ -1752,7 +1861,7 @@ function wireControls() {
     layoutCards();
     load(state.dataset);
   });
-  map.on('moveend', writeHash);
+  map.on('moveend', writeHashSoon); // flight keys move every frame
   map.on('zoom', renderSoon);
   // Double-click a node to search it; elsewhere it still zooms.
   map.on('dblclick', (e) => {
@@ -1768,8 +1877,9 @@ function wireControls() {
       globe.setProps({ initialViewState: globeCam });
     }
   });
+  wireFlightKeys();
   window.addEventListener('keydown', (e) => {
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+    if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
     const modes = { 1: 'cyber', 2: 'hybrid', 3: 'geo' };
     if (modes[e.key]) {
       state.mode = modes[e.key];
@@ -1792,6 +1902,84 @@ function wireControls() {
   });
 }
 
+// --- flight keys -------------------------------------------------------------
+// Held keys move the camera smoothly. 2D map: up/down pitch, left/right rotate
+// (bearing: roll about the view axis), A/D strafe, W/S zoom. Globe (no pitch
+// or rotation): arrows orbit, A/D orbit east-west, W/S zoom.
+
+const FLIGHT_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'w', 'a', 's', 'd']);
+const RATE = { pitch: 45, bearing: 75, zoom: 1.6, strafe: 0.7 }; // per second; strafe in viewport widths
+
+function wireFlightKeys() {
+  const held = new Set();
+  let raf = 0;
+  let timer = 0;
+  let last = 0;
+  // Next tick: an animation frame, or a timer if frames stall (a throttled
+  // tab, a GPU slower than the movement should be).
+  const schedule = () => {
+    raf = requestAnimationFrame(tick);
+    timer = setTimeout(tick, 100);
+  };
+  const tick = () => {
+    cancelAnimationFrame(raf);
+    clearTimeout(timer);
+    raf = timer = 0;
+    step(performance.now());
+  };
+  const axis = (pos, neg) => (held.has(pos) ? 1 : 0) - (held.has(neg) ? 1 : 0);
+  const step = (t) => {
+    const dt = Math.max(0, Math.min(0.25, (t - last) / 1000)); // smooth at any frame rate
+    last = t;
+    if (!held.size) {
+      writeHashSoon();
+      return;
+    }
+    const tilt = axis('ArrowUp', 'ArrowDown');
+    const turn = axis('ArrowRight', 'ArrowLeft');
+    const zoom = axis('w', 's');
+    const strafe = axis('d', 'a');
+    if (state.view === 'globe') {
+      if (globe && globeCam) {
+        const deg = (60 * dt) / Math.pow(2, Math.max(0, globeCam.zoom)); // degrees per frame
+        globeCam = {
+          ...globeCam,
+          latitude: Math.max(-85, Math.min(85, globeCam.latitude + tilt * deg)),
+          longitude: globeCam.longitude + (turn + strafe) * deg,
+          zoom: Math.max(0, Math.min(12, globeCam.zoom + zoom * RATE.zoom * dt)),
+          transitionDuration: 0,
+        };
+        globe.setProps({ initialViewState: globeCam });
+        if (zoom) {
+          globeZoom = globeCam.zoom;
+          renderSoon();
+        }
+      }
+    } else {
+      if (strafe) map.panBy([strafe * RATE.strafe * map.getContainer().clientWidth * dt, 0], { duration: 0 });
+      map.jumpTo({
+        pitch: Math.max(0, Math.min(85, map.getPitch() + tilt * RATE.pitch * dt)),
+        bearing: map.getBearing() + turn * RATE.bearing * dt,
+        zoom: map.getZoom() + zoom * RATE.zoom * dt,
+      });
+    }
+    schedule();
+  };
+  window.addEventListener('keydown', (e) => {
+    if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName) || e.metaKey || e.ctrlKey || e.altKey) return;
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (!FLIGHT_KEYS.has(k)) return;
+    e.preventDefault();
+    held.add(k);
+    if (!raf && !timer) {
+      last = performance.now();
+      schedule();
+    }
+  });
+  window.addEventListener('keyup', (e) => held.delete(e.key.length === 1 ? e.key.toLowerCase() : e.key));
+  window.addEventListener('blur', () => held.clear());
+}
+
 // --- boot ----------------------------------------------------------------
 
 async function load(id) {
@@ -1803,6 +1991,7 @@ async function load(id) {
   arcCache.clear();
   memoCache.clear();
   infoRecs.clear();
+  if (!$('tracePanel').hidden) setTimeout(updateTrace); // re-resolve on the new map
   for (const k of Object.keys(lengthFactor)) delete lengthFactor[k];
   computeCoreRank();
   lowerNames = G.names.map((s) => s.toLowerCase());
@@ -1886,6 +2075,7 @@ window.netmap = {
   state,
   render: () => render(),
   layers: () => (state.view === 'globe' ? globe?.props.layers : overlay._props?.layers || []).map((l) => l.id),
+  map, // the MapLibre map (tests)
   deck: () => (state.view === 'globe' ? globe : overlay._deck),
   // screen position of node i on the 2D map (UI tests)
   project: (i) => {
