@@ -1,0 +1,269 @@
+{
+ "format": 1,
+ "name": "routers",
+ "generated": "2026-10-09T22:40:27+00:00",
+ "synthetic": false,
+ "kind": "routers",
+ "source": "CAIDA ITDK 2025-08 (midar-iff-snmp), routers aggregated to (AS, city) PoPs",
+ "notes": [],
+ "counts": {
+  "nodes": 148673,
+  "edges": 680213,
+  "p2c": 115587,
+  "p2p": 260803,
+  "geolocated": 148673,
+  "pinned": 148673,
+  "backbone": 148321,
+  "pops": 0,
+  "routes": 0
+ },
+ "modes": [
+  "cyber",
+  "geo",
+  "hybrid"
+ ],
+ "morph": [
+  "pos_cyber",
+  "pos_m1",
+  "pos_m2",
+  "pos_m3",
+  "pos_hybrid",
+  "pos_m5",
+  "pos_m6",
+  "pos_m7",
+  "pos_geo"
+ ],
+ "regions": [
+  {
+   "id": "unknown",
+   "name": "Unknown",
+   "rgb": [
+    220,
+    220,
+    220
+   ]
+  },
+  {
+   "id": "na",
+   "name": "North America",
+   "rgb": [
+    70,
+    110,
+    255
+   ]
+  },
+  {
+   "id": "eu",
+   "name": "Europe / Middle East / Central Asia",
+   "rgb": [
+    60,
+    210,
+    90
+   ]
+  },
+  {
+   "id": "ap",
+   "name": "Asia Pacific",
+   "rgb": [
+    255,
+    70,
+    60
+   ]
+  },
+  {
+   "id": "lac",
+   "name": "Latin America & Caribbean",
+   "rgb": [
+    245,
+    215,
+    50
+   ]
+  },
+  {
+   "id": "af",
+   "name": "Africa",
+   "rgb": [
+    255,
+    140,
+    30
+   ]
+  }
+ ],
+ "info_chunk": 1024,
+ "sections": {
+  "asn": {
+   "dtype": "uint32",
+   "offset": 0,
+   "length": 148673,
+   "shape": [
+    148673
+   ]
+  },
+  "pos_cyber": {
+   "dtype": "float32",
+   "offset": 594696,
+   "length": 297346,
+   "shape": [
+    148673,
+    2
+   ]
+  },
+  "pos_geo": {
+   "dtype": "float32",
+   "offset": 1784080,
+   "length": 297346,
+   "shape": [
+    148673,
+    2
+   ]
+  },
+  "pos_hybrid": {
+   "dtype": "float32",
+   "offset": 2973464,
+   "length": 297346,
+   "shape": [
+    148673,
+    2
+   ]
+  },
+  "level": {
+   "dtype": "float32",
+   "offset": 4162848,
+   "length": 148673,
+   "shape": [
+    148673
+   ]
+  },
+  "degree": {
+   "dtype": "uint32",
+   "offset": 4757544,
+   "length": 148673,
+   "shape": [
+    148673
+   ]
+  },
+  "cone": {
+   "dtype": "uint32",
+   "offset": 5352240,
+   "length": 148673,
+   "shape": [
+    148673
+   ]
+  },
+  "region": {
+   "dtype": "uint8",
+   "offset": 5946936,
+   "length": 148673,
+   "shape": [
+    148673
+   ]
+  },
+  "flags": {
+   "dtype": "uint8",
+   "offset": 6095616,
+   "length": 148673,
+   "shape": [
+    148673
+   ]
+  },
+  "edges": {
+   "dtype": "uint32",
+   "offset": 6244296,
+   "length": 1360426,
+   "shape": [
+    680213,
+    2
+   ]
+  },
+  "edge_rel": {
+   "dtype": "int8",
+   "offset": 11686000,
+   "length": 680213,
+   "shape": [
+    680213
+   ]
+  },
+  "edge_rank": {
+   "dtype": "uint8",
+   "offset": 12366216,
+   "length": 680213,
+   "shape": [
+    680213
+   ]
+  },
+  "edge_backbone": {
+   "dtype": "uint8",
+   "offset": 13046432,
+   "length": 680213,
+   "shape": [
+    680213
+   ]
+  },
+  "pos_m1": {
+   "dtype": "float32",
+   "offset": 13726648,
+   "length": 297346,
+   "shape": [
+    148673,
+    2
+   ]
+  },
+  "pos_m2": {
+   "dtype": "float32",
+   "offset": 14916032,
+   "length": 297346,
+   "shape": [
+    148673,
+    2
+   ]
+  },
+  "pos_m3": {
+   "dtype": "float32",
+   "offset": 16105416,
+   "length": 297346,
+   "shape": [
+    148673,
+    2
+   ]
+  },
+  "pos_m5": {
+   "dtype": "float32",
+   "offset": 17294800,
+   "length": 297346,
+   "shape": [
+    148673,
+    2
+   ]
+  },
+  "pos_m6": {
+   "dtype": "float32",
+   "offset": 18484184,
+   "length": 297346,
+   "shape": [
+    148673,
+    2
+   ]
+  },
+  "pos_m7": {
+   "dtype": "float32",
+   "offset": 19673568,
+   "length": 297346,
+   "shape": [
+    148673,
+    2
+   ]
+  },
+  "edge_weight": {
+   "dtype": "uint32",
+   "offset": 20862952,
+   "length": 680213,
+   "shape": [
+    680213
+   ]
+  }
+ },
+ "attribution": [
+  "The CAIDA UCSD Macroscopic Internet Topology Data Kit (ITDK) - 2025-08, <a href=\"https://catalog.caida.org/dataset/macroscopic_internet_topology_data_kit_itdk\">catalog</a>",
+  "The CAIDA UCSD AS Relationships Dataset - 20261001, <a href=\"https://catalog.caida.org/dataset/as_relationships_serial_2\">catalog</a>"
+ ]
+}
