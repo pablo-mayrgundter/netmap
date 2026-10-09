@@ -55,6 +55,7 @@ svg { width: 24px; height: 24px; fill: currentColor; display: block; }
   transition: background 120ms, color 120ms;
 }
 .icon-btn:hover { background: var(--hover); color: var(--fg); }
+.icon-btn:disabled { opacity: 0.35; cursor: default; background: transparent; }
 .icon-btn:focus-visible, .fab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 .fab {
@@ -86,16 +87,62 @@ svg { width: 24px; height: 24px; fill: currentColor; display: block; }
 #dock > * { pointer-events: auto; }
 #panel { width: 268px; }
 
-#info { position: absolute; top: 12px; right: 12px; width: 320px; z-index: 2; }
+/* details: a stack of cards, one per waypoint; scrolls when it outgrows the screen */
+#info {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 320px;
+  z-index: 2;
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+  border-radius: 12px;
+}
+#info[hidden] { display: none; }
+#infoCards { display: flex; flex-direction: column; gap: 8px; }
+#infoCards .card { max-height: none; overflow: visible; }
 #infoFab { position: absolute; top: 12px; right: 12px; z-index: 2; }
-#infoMin { position: absolute; top: 6px; right: 6px; }
+#infoMin { position: absolute; top: 6px; right: 6px; z-index: 1; }
+.wp.compact { padding: 8px 12px; cursor: pointer; }
+.wp.compact:hover { border-color: rgba(127, 178, 255, 0.45); }
+.wp.compact h2 { font-size: 13px; margin: 0 28px 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wp.compact .line { color: var(--muted); font-size: 12px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wp-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  margin-right: 6px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #05070c;
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: 2px;
+}
+.wp .via { color: #ffd54a; font-size: 12px; margin: 0 0 6px; }
+.wp .via.warn { color: #ff9e7a; }
+
+/* the map is a crosshair; panning shows the grab hand */
+.maplibregl-canvas-container.maplibregl-interactive, #globe canvas { cursor: crosshair; }
+.maplibregl-canvas-container.maplibregl-interactive:active { cursor: grabbing; }
 
 header { display: flex; align-items: center; gap: 8px; margin: -4px -6px 8px 0; }
 header .sub { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 h1 { font-size: 18px; margin: 0; letter-spacing: 0.04em; }
 .sub { color: var(--muted); }
 
-/* search toolbar: an icon that expands to the right into a field */
+/* search: a stack of rows (waypoints), each an icon that expands right
+   into a field; the add button below starts another row */
+#searchStack { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+#searchStack > * { pointer-events: auto; }
+#addWaypoint { background: var(--panel); border: 1px solid var(--line); box-shadow: var(--elev); margin-left: 4px; }
+#addWaypoint:disabled { background: var(--panel); }
+.search-row.active { border-color: rgba(127, 178, 255, 0.6); }
+.search-row .remove { width: 30px; height: 30px; }
+.search-row .remove svg { width: 18px; height: 18px; }
 .toolbar {
   position: relative;
   display: flex;
@@ -117,8 +164,9 @@ h1 { font-size: 18px; margin: 0; letter-spacing: 0.04em; }
   padding: 0 10px 0 4px;
   outline: none;
 }
-#results {
+.results {
   position: absolute;
+  z-index: 3;
   top: calc(100% + 6px);
   left: 0;
   right: 0;
@@ -133,10 +181,10 @@ h1 { font-size: 18px; margin: 0; letter-spacing: 0.04em; }
   border-radius: 12px;
   box-shadow: var(--elev);
 }
-#results:empty, .toolbar:not(.open) #results { display: none; }
-#results li { padding: 6px 8px; cursor: pointer; border-radius: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#results li:hover, #results li.active { background: rgba(127, 178, 255, 0.18); }
-#results .asn { color: var(--accent); margin-right: 6px; font-variant-numeric: tabular-nums; }
+.results:empty, .toolbar:not(.open) .results { display: none; }
+.results li { padding: 6px 8px; cursor: pointer; border-radius: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.results li:hover, .results li.active { background: rgba(127, 178, 255, 0.18); }
+.results .asn { color: var(--accent); margin-right: 6px; font-variant-numeric: tabular-nums; }
 
 #banner {
   background: rgba(255, 180, 40, 0.14);

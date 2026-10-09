@@ -85,19 +85,24 @@
       <p id="stats"></p>
     </aside>
 
-    <div id="searchbar" class="toolbar">
-      <button id="searchBtn" class="icon-btn" data-icon="search" title="Search (/)" aria-label="Search" aria-expanded="false"></button>
-      <div class="field">
-        <input id="search" type="search" placeholder="Find AS number or name…" autocomplete="off" tabindex="-1" />
-        <ul id="results" role="listbox"></ul>
+    <!-- search rows: each is a waypoint; double-clicking a node fills the active one -->
+    <div id="searchStack">
+      <div class="toolbar search-row" data-k="0">
+        <button class="icon-btn search-btn" data-icon="search" title="Search (/)" aria-label="Search" aria-expanded="false"></button>
+        <div class="field">
+          <input type="search" placeholder="Find AS number or name…" autocomplete="off" tabindex="-1" />
+          <ul class="results" role="listbox"></ul>
+        </div>
       </div>
+      <button id="addWaypoint" class="icon-btn" data-icon="control_point" title="Add a waypoint: route from the last search to another node" aria-label="Add waypoint" disabled></button>
     </div>
     </div>
 
     <button id="infoFab" class="fab" data-icon="format_list_bulleted" title="Show details" aria-label="Show details" hidden></button>
-    <aside id="info" class="card" hidden>
+    <!-- one details card per waypoint; the active one in full, the others compact -->
+    <aside id="info" hidden>
       <button id="infoMin" class="icon-btn" data-icon="expand_less" title="Minimize" aria-label="Minimize details"></button>
-      <div id="infoBody"></div>
+      <div id="infoCards"></div>
     </aside>
 
     <div id="tooltip" hidden></div>

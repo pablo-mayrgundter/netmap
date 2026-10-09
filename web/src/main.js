@@ -8,14 +8,24 @@ import { feature } from 'topojson-client';
 import countries110 from 'world-atlas/countries-110m.json';
 
 import { listDatasets, loadBundle } from './data.js';
+import { route } from './route.js';
 
 // Material Icons (Apache-2.0), the same glyphs as MUI's icons, inlined as SVG.
 import hubIcon from '@material-design-icons/svg/filled/hub.svg?raw';
 import listIcon from '@material-design-icons/svg/filled/format_list_bulleted.svg?raw';
 import expandLessIcon from '@material-design-icons/svg/filled/expand_less.svg?raw';
 import searchIcon from '@material-design-icons/svg/filled/search.svg?raw';
+import controlPointIcon from '@material-design-icons/svg/filled/control_point.svg?raw';
+import closeIcon from '@material-design-icons/svg/filled/close.svg?raw';
 
-const ICONS = { hub: hubIcon, format_list_bulleted: listIcon, expand_less: expandLessIcon, search: searchIcon };
+const ICONS = {
+  hub: hubIcon,
+  format_list_bulleted: listIcon,
+  expand_less: expandLessIcon,
+  search: searchIcon,
+  control_point: controlPointIcon,
+  close: closeIcon,
+};
 for (const el of document.querySelectorAll('[data-icon]')) el.innerHTML = ICONS[el.dataset.icon];
 
 // Where map bundles live. PR previews point this at the production data (../../data).
@@ -100,7 +110,9 @@ function readParam([, key, type, def]) {
 const state = {
   dataset: hash.get('data') || params.get('data') || null,
   ...Object.fromEntries(PARAMS.map((p) => [p[0], readParam(p)])),
-  selected: null, // node index
+  selected: null, // the active waypoint's node, or null
+  waypoints: [], // node per search row (-1 while a row has no pick yet)
+  active: 0, // the row double-clicks and picks fill
   hover: null,
 };
 
@@ -114,6 +126,8 @@ const $ = (id) => document.getElementById(id);
 
 // --- maps ----------------------------------------------------------------
 
+const FIT_MARGIN = 16; // ~1em between the map's edge and the cards when zoomed out
+let mapRef = null; // the map, once constructed (its constrain runs during construction)
 const map = new maplibregl.Map({
   container: 'map',
   style: baseStyle(),
@@ -123,17 +137,16 @@ const map = new maplibregl.Map({
   attributionControl: { compact: true },
   maxZoom: 16,
   // Zoom out past "the world fills the viewport" (MapLibre's default without
-  // world copies), so the whole map fits between the cards; just keep the
-  // centre on the world.
-  minZoom: -1,
-  transformConstrain: (lngLat, zoom) => ({
-    center: new maplibregl.LngLat(Math.max(-180, Math.min(180, lngLat.lng)), Math.max(-85, Math.min(85, lngLat.lat))),
-    zoom: Math.max(-1, Math.min(16, zoom)),
-  }),
+  // world copies), so the whole map fits between the cards (layoutCards sets
+  // the limit, constrainView keeps the world in view).
+  minZoom: -2,
+  transformConstrain: (lngLat, zoom) => constrainView(lngLat, zoom),
 });
+mapRef = map;
 map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
 
-const overlay = new MapboxOverlay({ interleaved: false, layers: [], getTooltip: null });
+const crosshair = ({ isDragging }) => (isDragging ? 'grabbing' : 'crosshair');
+const overlay = new MapboxOverlay({ interleaved: false, layers: [], getTooltip: null, getCursor: crosshair });
 map.addControl(overlay);
 
 let globe = null;
@@ -145,7 +158,6 @@ function ensureGlobe() {
     parent: $('globe'),
     views: new GlobeView({ resolution: 5 }),
     initialViewState: (globeCam = { longitude: c.lng, latitude: c.lat, zoom: (globeZoom = Math.max(map.getZoom() - 0.6, 0)) }),
-    controller: true,
     layers: [],
     onHover: onHover,
     onClick: onClick,
@@ -157,7 +169,8 @@ function ensureGlobe() {
         renderSoon();
       }
     },
-    getCursor: ({ isHovering }) => (isHovering ? 'pointer' : 'grab'),
+    getCursor: crosshair,
+    controller: { doubleClickZoom: false }, // double-click picks a node (see wireControls)
   });
   return globe;
 }
@@ -912,18 +925,45 @@ function networkLayers(globeView) {
     );
   }
 
-  if (state.selected !== null) {
+  // Route between waypoints: the edges of each leg, bright, on top.
+  if (pathEdges.length) {
+    const key = `path|${state.waypoints.join(',')}`;
+    const PATH = [255, 213, 74, 235];
+    if (globeView) {
+      const data = memo(`${key}|${trig}|arcs`, () =>
+        buildArcs(pathEdges.length, (k, a, b) => (endPos(pathEdges[k], 0, a), endPos(pathEdges[k], 1, b)), 0.05));
+      layers.push(new PathLayer({ id: 'path', data, _pathType: 'open', getColor: PATH, getWidth: 3, widthUnits: 'pixels', billboard: true, parameters: { depthCompare: 'always' } }));
+    } else {
+      layers.push(
+        new LineLayer({
+          id: 'path',
+          data: memo(key, () => pathEdges.slice()),
+          getSourcePosition: (k, { target }) => endPos(k, 0, target),
+          getTargetPosition: (k, { target }) => endPos(k, 1, target),
+          getColor: PATH,
+          getWidth: 3,
+          widthUnits: 'pixels',
+          parameters: { depthCompare: 'always' },
+          updateTriggers: { getSourcePosition: trig, getTargetPosition: trig },
+        }),
+      );
+    }
+  }
+
+  // A ring on each waypoint: white on the active one.
+  const marked = state.waypoints.map((w, k) => [w, k]).filter(([w]) => w >= 0);
+  if (marked.length) {
     layers.push(
       new ScatterplotLayer({
         id: 'sel-node',
-        data: memo(`sel|${state.selected}`, () => [state.selected]),
-        getPosition: (i, { target }) => pos(i, target),
-        getRadius: 9,
+        data: memo(`sel|${state.waypoints.join(',')}|${state.active}`, () => marked),
+        getPosition: ([i], { target }) => pos(i, target),
+        getRadius: ([, k]) => (k === state.active ? 9 : 7),
+        getLineColor: ([, k]) => (k === state.active ? [255, 255, 255, 255] : [255, 213, 74, 255]),
         radiusUnits: 'pixels',
         billboard: true,
         stroked: true,
         filled: false,
-        getLineColor: [255, 255, 255, 255],
         lineWidthMinPixels: 2,
         parameters: { depthCompare: 'always' },
         updateTriggers: { getPosition: trig },
@@ -1009,24 +1049,157 @@ function onHover(info) {
   }
 }
 
-function onClick(info) {
-  const picked = pickedNode(info);
-  if (picked !== null) select(picked, false);
-  else if (!info.layer) select(null);
+function onClick() {
+  // Single clicks don't select (so panning never picks a node); double-click does.
 }
 
-async function select(i, fly = true) {
-  state.selected = i;
-  infoReady = false;
+// Double-click a node: it fills the active search row, like picking it there.
+function onDoubleClick(info) {
+  const picked = info ? pickedNode(info) : null;
+  if (picked === null) return false;
+  setWaypoint(state.active, picked);
+  return true;
+}
+
+// --- waypoints -----------------------------------------------------------
+// Each search row is a waypoint. The active row is the one double-clicks and
+// picks fill; consecutive waypoints are joined by their BGP-style route.
+
+const infoRecs = new Map(); // node -> details record
+let routes = []; // routes[k]: route from the previous waypoint to waypoint k
+let pathEdges = [];
+
+function syncSelected() {
+  const w = state.waypoints[state.active];
+  state.selected = w !== undefined && w >= 0 ? w : null;
+}
+
+function computeRoutes() {
+  routes = [];
+  pathEdges = [];
+  let prev = -1;
+  state.waypoints.forEach((w, k) => {
+    routes[k] = null;
+    if (w < 0) return;
+    if (prev >= 0) {
+      routes[k] = route(G, prev, w);
+      if (routes[k]) pathEdges.push(...routes[k].edges);
+    }
+    prev = w;
+  });
+}
+
+function waypointsChanged() {
+  syncSelected();
+  computeRoutes();
+  syncRows();
   render();
-  if (i === null) {
-    layoutCards();
-    return;
+  renderInfo();
+}
+
+function setWaypoint(k, node, { fly = false } = {}) {
+  while (state.waypoints.length <= k) state.waypoints.push(-1);
+  state.waypoints[k] = node;
+  state.active = k;
+  waypointsChanged();
+  if (fly) (routes[k] ? flyToRoute() : flyTo(node));
+  setWaypointInfo(node);
+}
+
+// Frame every waypoint and the route between them.
+function flyToRoute() {
+  const p = G[`pos_${state.mode}`];
+  const nodes = new Set(state.waypoints.filter((w) => w >= 0));
+  for (const r of routes) if (r) for (const v of r.nodes) nodes.add(v);
+  if (state.view === 'globe' || nodes.size < 2) return flyTo(state.selected);
+  let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const v of nodes) {
+    x0 = Math.min(x0, p[2 * v]), x1 = Math.max(x1, p[2 * v]);
+    y0 = Math.min(y0, p[2 * v + 1]), y1 = Math.max(y1, p[2 * v + 1]);
   }
-  if (fly) flyTo(i);
-  const rec = await G.info(i);
-  if (state.selected !== i) return;
-  showInfo(i, rec);
+  const pad = map.getPadding();
+  map.fitBounds([[x0, y0], [x1, y1]], {
+    padding: { top: 80, bottom: 80, left: pad.left + 60, right: pad.right + 60 },
+    maxZoom: 7,
+    speed: 1.4,
+  });
+}
+
+async function setWaypointInfo(node) {
+  if (infoRecs.has(node)) return;
+  const g = G;
+  const rec = await G.info(node);
+  if (g !== G) return; // dataset changed meanwhile
+  infoRecs.set(node, rec);
+  if (state.waypoints.includes(node)) renderInfo();
+}
+
+function setActive(k) {
+  if (k === state.active) return;
+  state.active = k;
+  waypointsChanged();
+}
+
+function addWaypoint() {
+  state.waypoints.push(-1);
+  state.active = state.waypoints.length - 1;
+  waypointsChanged();
+  openRow(state.active);
+}
+
+function removeWaypoint(k) {
+  if (k === 0 && state.waypoints.length <= 1) return clearWaypoints();
+  state.waypoints.splice(k, 1);
+  state.active = Math.min(state.active >= k && state.active > 0 ? state.active - 1 : state.active, state.waypoints.length - 1);
+  waypointsChanged();
+}
+
+function clearWaypoints() {
+  state.waypoints = [];
+  state.active = 0;
+  waypointsChanged();
+}
+
+// The details stack: the active waypoint in full, the others compact.
+function renderInfo() {
+  const many = state.waypoints.filter((w) => w >= 0).length > 1;
+  const cards = [];
+  state.waypoints.forEach((w, k) => {
+    if (w < 0) return;
+    const rec = infoRecs.get(w);
+    const num = many ? `<span class="wp-num">${k + 1}</span>` : '';
+    const via = viaHTML(k);
+    if (k === state.active) {
+      const body = rec ? detailsHTML(w, rec) : `<h2><span class="asn">AS${G.asn[w]}</span> ${esc(G.names[w])}</h2><p class="muted">loading…</p>`;
+      cards.push(`<section class="card wp active" data-k="${k}">${via}${body.replace('<h2>', `<h2>${num}`)}</section>`);
+    } else {
+      const line = rec ? `${fmt(rec.degree)} links${rec.country ? ` · ${esc(rec.country)}` : ''}${rec.rank ? ` · rank #${fmt(rec.rank)}` : ''}` : '';
+      cards.push(`<section class="card wp compact" data-k="${k}" title="Show details">${via}
+        <h2>${num}<span class="asn">AS${G.asn[w]}</span> ${esc(G.names[w])}</h2><div class="line">${line}</div></section>`);
+    }
+  });
+  $('infoCards').innerHTML = cards.join('');
+  for (const card of $('infoCards').querySelectorAll('.wp.compact')) {
+    card.addEventListener('click', () => setActive(Number(card.dataset.k)));
+  }
+  for (const li of $('infoCards').querySelectorAll('.wp.active .nbrs li')) {
+    li.addEventListener('click', () => setWaypoint(state.active, Number(li.dataset.i), { fly: true }));
+  }
+  layoutCards();
+}
+
+// How a waypoint is reached from the previous one.
+function viaHTML(k) {
+  const prevK = state.waypoints.slice(0, k).findLastIndex((w) => w >= 0);
+  if (prevK < 0) return '';
+  const r = routes[k];
+  if (!r) return `<p class="via warn">↳ no path from ${prevK + 1} in this data</p>`;
+  // the AS-level path, consecutive duplicates (one network's PoPs) merged
+  const asns = r.nodes.map((v) => G.asn[v]).filter((a, j, xs) => j === 0 || a !== xs[j - 1]);
+  const shown = asns.length > 8 ? [...asns.slice(0, 4), '…', ...asns.slice(-3)] : asns;
+  const hops = `${r.edges.length} hop${r.edges.length === 1 ? '' : 's'}`;
+  const kind = r.valleyFree ? 'valley-free' : 'not valley-free: shortest path';
+  return `<p class="via${r.valleyFree ? '' : ' warn'}" title="${asns.map((a) => `AS${a}`).join(' → ')}">↳ ${hops} from ${prevK + 1} (${kind})<br>${shown.map((a) => (a === '…' ? a : `AS${a}`)).join(' → ')}</p>`;
 }
 
 function flyTo(i) {
@@ -1044,7 +1217,7 @@ function flyTo(i) {
 
 const fmt = (x) => x.toLocaleString('en-US');
 
-function showInfo(i, r) {
+function detailsHTML(i, r) {
   const routers = G.meta.kind === 'routers';
   const wOf = (d) => (G.edge_weight ? G.edge_weight[d.edge] : 0);
   const nb = G.neighbours(i)
@@ -1079,7 +1252,7 @@ function showInfo(i, r) {
     r.addrs !== undefined ? row('IPv4', `${fmt(r.addrs)} addrs (${slash24 >= 1 ? fmt(Math.round(slash24)) + ' /24s' : '< /24'}), ${fmt(r.nprefix)} ranges`) : '',
     r.sites ? row('Geo', r.sites.length ? `${(r.concentration * 100).toFixed(0)}% near main site · ${r.pinned ? 'pinned' : 'floating'} in hybrid` : 'no geolocation') : '',
   ].join('');
-  $('infoBody').innerHTML = `
+  return `
     <h2><span class="asn">AS${r.asn}</span> ${esc(r.name)}</h2>
     ${r.as_name && r.as_name !== r.name ? `<div class="muted">${esc(r.as_name)}</div>` : ''}
     <dl>${rows}</dl>
@@ -1094,29 +1267,48 @@ function showInfo(i, r) {
           <a href="https://asrank.caida.org/asns/${r.asn}" target="_blank" rel="noopener">CAIDA ASRank</a> ·
           <a href="https://www.peeringdb.com/asn/${r.asn}" target="_blank" rel="noopener">PeeringDB</a></li>
     </ul>`;
-  infoReady = true;
-  layoutCards();
-  for (const li of $('infoBody').querySelectorAll('.nbrs li')) {
-    li.addEventListener('click', () => select(Number(li.dataset.i)));
-  }
 }
 
 // --- cards ---------------------------------------------------------------
 // The controls and details cards minimise to icons. The map is padded by the
 // cards that are open, so its centre (and zoom-to-fit) is the space between.
 
-let infoReady = false; // details for the current selection are loaded
 function layoutCards() {
   $('panel').hidden = !state.panelOpen;
   $('panelFab').hidden = state.panelOpen;
-  const sel = state.selected !== null && infoReady;
+  const sel = state.waypoints.some((w) => w >= 0);
   $('info').hidden = !(sel && state.detailsOpen);
   $('infoFab').hidden = !(sel && !state.detailsOpen);
   const narrow = window.innerWidth <= 720;
   const left = !narrow && state.panelOpen ? $('panel').getBoundingClientRect().right : 0;
   const right = !narrow && !$('info').hidden ? window.innerWidth - $('info').getBoundingClientRect().left : 0;
+  // Furthest zoom-out: the world square fits the space between the cards.
+  const c = map.getContainer();
+  const free = Math.min(c.clientWidth - left - right, c.clientHeight) - 2 * FIT_MARGIN;
+  map.setMinZoom(Math.max(-2, Math.min(4, Math.log2(Math.max(free, 64) / 512))));
   const pad = map.getPadding();
   if (pad.left !== left || pad.right !== right) map.easeTo({ padding: { top: 0, bottom: 0, left, right }, duration: 300 });
+}
+
+// Keep the view on the world: when the world is narrower than the free space
+// it's centred, otherwise its edges can't come further in than FIT_MARGIN.
+function constrainView(lngLat, zoom) {
+  if (!mapRef) return { center: lngLat, zoom };
+  const z = Math.max(mapRef.getMinZoom(), Math.min(mapRef.getMaxZoom(), zoom));
+  const W = 512 * Math.pow(2, z);
+  const pad = mapRef.getPadding();
+  const c = mapRef.getContainer();
+  const fw = c.clientWidth - pad.left - pad.right - 2 * FIT_MARGIN;
+  const fh = c.clientHeight - pad.top - pad.bottom - 2 * FIT_MARGIN;
+  const lat = Math.max(-85.0511, Math.min(85.0511, lngLat.lat));
+  let x = ((lngLat.lng + 180) / 360) * W;
+  let y = (0.5 - Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360)) / (2 * Math.PI)) * W;
+  const clamp = (v, f) => (W <= f ? W / 2 : Math.max(f / 2, Math.min(W - f / 2, v)));
+  x = clamp(x, fw);
+  y = clamp(y, fh);
+  const lng = (x / W) * 360 - 180;
+  const lat2 = (Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / W))) * 180) / Math.PI;
+  return { center: new maplibregl.LngLat(lng, lat2), zoom: z };
 }
 
 function setCard(key, open) {
@@ -1150,66 +1342,140 @@ function search(q) {
   return out;
 }
 
-// The search toolbar: an icon that expands to the right into the field.
-function openSearch(open = true) {
-  const bar = $('searchbar');
-  const input = $('search');
-  bar.classList.toggle('open', open);
-  $('searchBtn').setAttribute('aria-expanded', String(open));
-  input.tabIndex = open ? 0 : -1;
+// Search rows: row 0 is an icon that expands right into a field; rows added
+// with the control-point button are always open and can be removed.
+const nodeLabel = (i) => `AS${G.asn[i]} ${G.names[i]}`;
+const rowEl = (k) => $('searchStack').querySelector(`.search-row[data-k="${k}"]`);
+
+function openRow(k, open = true) {
+  const row = rowEl(k);
+  if (!row) return;
+  const input = row.querySelector('input');
+  if (k === 0) {
+    row.classList.toggle('open', open);
+    row.querySelector('.search-btn').setAttribute('aria-expanded', String(open));
+    input.tabIndex = open ? 0 : -1;
+  }
   if (open) input.focus();
   else {
-    input.value = '';
-    $('results').innerHTML = '';
+    row.querySelector('.results').innerHTML = '';
     input.blur();
   }
 }
 
-function wireSearch() {
-  const input = $('search');
-  const list = $('results');
+function makeRow(k) {
+  const row = document.createElement('div');
+  row.className = 'toolbar search-row open';
+  row.dataset.k = k;
+  row.innerHTML = `
+    <i class="icon-btn" aria-hidden="true">${ICONS.search}</i>
+    <div class="field">
+      <input type="search" placeholder="Next waypoint: AS number or name…" autocomplete="off" />
+      <ul class="results" role="listbox"></ul>
+    </div>
+    <button class="icon-btn remove" title="Remove waypoint" aria-label="Remove waypoint">${ICONS.close}</button>`;
+  return row;
+}
+
+// Rows follow state.waypoints (at least one row); labels show each pick.
+function syncRows() {
+  const stack = $('searchStack');
+  const add = $('addWaypoint');
+  const want = Math.max(1, state.waypoints.length);
+  const rows = [...stack.querySelectorAll('.search-row')];
+  while (rows.length > want) rows.pop().remove();
+  while (rows.length < want) {
+    const row = makeRow(rows.length);
+    stack.insertBefore(row, add);
+    wireRow(row);
+    rows.push(row);
+  }
+  rows.forEach((row, k) => {
+    const w = state.waypoints[k];
+    const input = row.querySelector('input');
+    if (w !== undefined && w >= 0) input.value = nodeLabel(w);
+    else if (document.activeElement !== input) input.value = '';
+    row.classList.toggle('active', want > 1 && k === state.active);
+  });
+  if (state.waypoints[0] >= 0 && !rows[0].classList.contains('open')) {
+    rows[0].classList.add('open');
+    rows[0].querySelector('input').tabIndex = 0;
+  }
+  const last = state.waypoints[state.waypoints.length - 1];
+  add.disabled = !(last !== undefined && last >= 0);
+}
+
+function wireRow(row) {
+  const input = row.querySelector('input');
+  const list = row.querySelector('.results');
+  const kOf = () => Number(row.dataset.k);
   let items = [];
   let active = 0;
-  $('searchBtn').addEventListener('click', () => openSearch(!$('searchbar').classList.contains('open')));
-  // close when focus leaves an empty field (results keep focus on mousedown)
-  list.addEventListener('mousedown', (e) => e.preventDefault());
-  input.addEventListener('blur', () => {
-    if (!input.value.trim()) openSearch(false);
-  });
   const draw = () => {
     list.innerHTML = items
-      .map((i, k) => `<li data-i="${i}" class="${k === active ? 'active' : ''}"><span class="asn">AS${G.asn[i]}</span>${esc(G.names[i])}</li>`)
+      .map((i, j) => `<li data-i="${i}" class="${j === active ? 'active' : ''}"><span class="asn">AS${G.asn[i]}</span>${esc(G.names[i])}</li>`)
       .join('');
   };
+  const pick = (i) => {
+    items = [];
+    list.innerHTML = '';
+    input.blur();
+    setWaypoint(kOf(), i, { fly: true });
+  };
+  input.addEventListener('focus', () => {
+    const k = kOf();
+    if (k < state.waypoints.length) setActive(k);
+    input.select();
+  });
   input.addEventListener('input', () => {
+    const k = kOf();
+    // clearing a row's text (or its x) drops its waypoint
+    if (!input.value && state.waypoints[k] >= 0) return removeWaypoint(k);
     items = search(input.value);
     active = 0;
     draw();
   });
+  input.addEventListener('blur', () => {
+    list.innerHTML = '';
+    const k = kOf();
+    if (k === 0 && !input.value.trim() && !state.waypoints.length) openRow(0, false);
+    else syncRows(); // an unpicked edit reverts to the row's waypoint
+  });
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-      openSearch(false);
       e.stopPropagation();
+      const k = kOf();
+      if (k === 0 && state.waypoints.length <= 1) {
+        clearWaypoints();
+        input.value = '';
+        openRow(0, false);
+      } else removeWaypoint(k);
       return;
     }
     if (e.key === 'ArrowDown') active = Math.min(active + 1, items.length - 1);
     else if (e.key === 'ArrowUp') active = Math.max(active - 1, 0);
-    else if (e.key === 'Enter' && items[active] !== undefined) {
-      select(items[active]);
-      list.innerHTML = '';
-      input.blur();
-      return;
-    } else return;
+    else if (e.key === 'Enter' && items[active] !== undefined) return pick(items[active]);
+    else return;
     e.preventDefault();
     draw();
   });
+  list.addEventListener('mousedown', (e) => e.preventDefault()); // keep focus
   list.addEventListener('click', (e) => {
     const li = e.target.closest('li');
-    if (li) {
-      select(Number(li.dataset.i));
-      list.innerHTML = '';
-    }
+    if (li) pick(Number(li.dataset.i));
   });
+  row.querySelector('.remove')?.addEventListener('click', () => removeWaypoint(kOf()));
+}
+
+function wireSearch() {
+  const row0 = rowEl(0);
+  wireRow(row0);
+  row0.querySelector('.search-btn').addEventListener('click', () => {
+    const open = row0.classList.contains('open');
+    if (open && !state.waypoints.length && !row0.querySelector('input').value) openRow(0, false);
+    else openRow(0, true);
+  });
+  $('addWaypoint').addEventListener('click', addWaypoint);
 }
 
 // --- controls ------------------------------------------------------------
@@ -1247,9 +1513,10 @@ function writeHash() {
     h.set('lat', c.lat.toFixed(3));
     h.set('z', map.getZoom().toFixed(2));
   }
-  if (state.selected !== null && G) {
-    h.set('as', G.asn[state.selected]);
-    if (G.meta.kind === 'routers') h.set('pop', state.selected); // which of the AS's PoPs
+  const wps = state.waypoints.filter((w) => w >= 0);
+  if (wps.length && G) {
+    h.set('as', wps.map((w) => G.asn[w]).join(','));
+    if (G.meta.kind === 'routers') h.set('pop', wps.join(',')); // which of each AS's PoPs
   }
   history.replaceState(null, '', `#${h}`);
 }
@@ -1328,13 +1595,32 @@ function wireControls() {
   window.addEventListener('resize', () => layoutCards());
   $('dataset').addEventListener('change', (e) => {
     state.dataset = e.target.value;
+    state.waypoints = [];
+    state.active = 0;
     state.selected = null;
-    infoReady = false;
+    pathEdges = [];
+    routes = [];
+    syncRows();
+    $('infoCards').innerHTML = '';
     layoutCards();
     load(state.dataset);
   });
   map.on('moveend', writeHash);
   map.on('zoom', renderSoon);
+  // Double-click a node to search it; elsewhere it still zooms.
+  map.on('dblclick', (e) => {
+    const info = overlay.pickObject({ x: e.point.x, y: e.point.y, radius: 4, layerIds: ['nodes', 'pops'] });
+    if (onDoubleClick(info)) e.preventDefault();
+  });
+  $('globe').addEventListener('dblclick', (e) => {
+    if (!globe) return;
+    const r = $('globe').getBoundingClientRect();
+    const info = globe.pickObject({ x: e.clientX - r.left, y: e.clientY - r.top, radius: 4, layerIds: ['nodes', 'pops'] });
+    if (!onDoubleClick(info) && globeCam) {
+      globeCam = { ...globeCam, zoom: globeCam.zoom + 1, transitionDuration: 300 };
+      globe.setProps({ initialViewState: globeCam });
+    }
+  });
   window.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
     const modes = { 1: 'cyber', 2: 'hybrid', 3: 'geo' };
@@ -1344,10 +1630,13 @@ function wireControls() {
       render();
     } else if (e.key === 'g') {
       $('view').querySelector(`[data-v="${state.view === 'globe' ? 'map' : 'globe'}"]`).click();
-    } else if (e.key === 'Escape') select(null);
+    } else if (e.key === 'Escape') {
+      clearWaypoints();
+      openRow(0, false);
+    }
     else if (e.key === '/') {
       e.preventDefault();
-      openSearch(true);
+      openRow(Math.min(state.active, Math.max(0, state.waypoints.length - 1)));
     }
   });
 }
@@ -1362,6 +1651,7 @@ async function load(id) {
   fiberCache = { key: null, value: null };
   arcCache.clear();
   memoCache.clear();
+  infoRecs.clear();
   for (const k of Object.keys(lengthFactor)) delete lengthFactor[k];
   computeCoreRank();
   lowerNames = G.names.map((s) => s.toLowerCase());
@@ -1399,10 +1689,18 @@ async function load(id) {
   updateRaster();
   render();
 
-  const want = hash.get('as');
-  const pop = Number(hash.get('pop'));
-  if (want && Number.isInteger(pop) && hash.has('pop') && G.asn[pop] === Number(want)) select(pop, false);
-  else if (want && G.byAsn.has(Number(want))) select(G.byAsn.get(Number(want)), false);
+  // waypoints from the permalink: as=A,B,… (and pop=… on router maps)
+  const asns = (hash.get('as') || '').split(',').filter(Boolean).map(Number);
+  const pops = (hash.get('pop') || '').split(',').map(Number);
+  const nodes = asns
+    .map((a, k) => (Number.isInteger(pops[k]) && G.asn[pops[k]] === a ? pops[k] : G.byAsn.get(a)))
+    .filter((v) => v !== undefined);
+  if (nodes.length) {
+    nodes.forEach((v, k) => (state.waypoints[k] = v));
+    state.active = nodes.length - 1;
+    waypointsChanged();
+    for (const v of nodes) setWaypointInfo(v);
+  }
 }
 
 async function boot() {
@@ -1430,6 +1728,13 @@ window.netmap = {
   render: () => render(),
   layers: () => (state.view === 'globe' ? globe?.props.layers : overlay._props?.layers || []).map((l) => l.id),
   deck: () => (state.view === 'globe' ? globe : overlay._deck),
+  // screen position of node i on the 2D map (UI tests)
+  project: (i) => {
+    const p = G[`pos_${state.mode}`];
+    const { x, y } = map.project([p[2 * i], p[2 * i + 1]]);
+    return { x, y };
+  },
+  byAsn: (asn) => G.byAsn.get(asn),
   // what one zoom event costs on the main thread (perf probes)
   zoomStep: (dz) => {
     if (state.view === 'globe') globeZoom += dz;
