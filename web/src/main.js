@@ -63,6 +63,7 @@ const PARAMS = [
   ['edgeAlpha', 'edges', 'num', 0.05],
   ['nodeSize', 'nodes', 'num', 0],
   ['sampling', 'sample', 'num', 0], // 0 = one vantage tree .. 1 = every link
+  ['core', 'core', 'num', 0], // hide this fraction of nodes, least core first
   ['altitude', 'alt', 'num', 0.2],
   ['showTransit', 'transit', 'bool', true],
   ['showPeering', 'peering', 'bool', true],
@@ -369,6 +370,19 @@ function buildArcs(count, ends, liftK) {
   return { length: count, startIndices, attributes: { getPath: { value: path, size: 3 } } };
 }
 
+// deck.gl compares `data` by reference: a fresh object on every render (each
+// zoom event) makes it recompute every attribute of every layer. So layer data
+// objects are memoised on what they depend on.
+const memoCache = new Map();
+function memo(key, make) {
+  const k = `${G?.id}|${key}`;
+  if (!memoCache.has(k)) {
+    if (memoCache.size > 32) memoCache.clear();
+    memoCache.set(k, make());
+  }
+  return memoCache.get(k);
+}
+
 const arcCache = new Map();
 function cachedArcs(key, count, ends, liftK) {
   if (!arcCache.has(key)) {
@@ -393,7 +407,7 @@ function fiberCellSize() {
 let fiberCache = { key: null, value: null };
 function computeFibers() {
   const K = sampleK();
-  const key = `${state.mode}|${usePops()}|${state.fiberCell}|${K}|${state.showTransit}|${state.showPeering}|${state.backboneOnly}|${state.view}|${state.altitude}`;
+  const key = `${state.mode}|${usePops()}|${state.fiberCell}|${K}|${state.core}|${state.showTransit}|${state.showPeering}|${state.backboneOnly}|${state.view}|${state.altitude}`;
   if (fiberCache.key === key) return fiberCache.value;
   const cell = fiberCellSize();
   const inv = 1 / cell;
@@ -415,6 +429,7 @@ function computeFibers() {
   let members = new Uint32Array(cap);
   for (let k = 0; k < G.e; k++) {
     if (G.edge_rank && G.edge_rank[k] > K) continue;
+    if (G.edgeCore[k] < state.core) continue;
     if (!edgeVisible(k)) continue;
     endPos(k, 0, a);
     endPos(k, 1, b);
@@ -497,10 +512,10 @@ function fiberLayers(globeView, opacity) {
   const fOpacity = Math.min(1, opacity * 1.5);
   const make = (id, width, k, pickable) => {
     if (globeView) {
-      const data = buildArcs(fibers.length, (i, a, b) => {
+      const data = memo(`fiber-arcs|${fiberCache.key}`, () => buildArcs(fibers.length, (i, a, b) => {
         a[0] = fibers[i].source[0], a[1] = fibers[i].source[1], a[2] = fibers[i].source[2];
         b[0] = fibers[i].target[0], b[1] = fibers[i].target[1], b[2] = fibers[i].target[2];
-      }, 0.04);
+      }, 0.04));
       return new PathLayer({
         id,
         data,
@@ -512,6 +527,7 @@ function fiberLayers(globeView, opacity) {
         opacity: fOpacity,
         pickable,
         parameters: blendParams(true),
+        updateTriggers: { getColor: state.fiberWidth, getWidth: state.fiberWidth }, // alpha ~ ink / width
       });
     }
     return new LineLayer({
@@ -525,7 +541,7 @@ function fiberLayers(globeView, opacity) {
       opacity: fOpacity,
       pickable,
       parameters: blendParams(false),
-      updateTriggers: { getColor: fiberCache.key, getWidth: `${fiberCache.key}|${state.fiberWidth}` },
+      updateTriggers: { getColor: `${fiberCache.key}|${state.fiberWidth}`, getWidth: `${fiberCache.key}|${state.fiberWidth}` },
     });
   };
   // a faint halo under a core that carries most of the ink
@@ -549,6 +565,30 @@ function blendParams(globeView) {
   p.depthWriteEnabled = false;
   p.depthCompare = globeView ? 'less-equal' : 'always';
   return p;
+}
+
+// Core slider: rank nodes by hierarchy level (ties by degree) so the slider
+// hides that fraction of nodes, edge first, keeping the core routes. A link
+// is as core as its less-core end. Applied as a GPU filter range: instant.
+function computeCoreRank() {
+  const order = Array.from({ length: G.n }, (_, i) => i);
+  order.sort((a, b) => G.level[a] - G.level[b] || G.degree[a] - G.degree[b]);
+  G.coreRank = new Float32Array(G.n);
+  order.forEach((v, r) => (G.coreRank[v] = r / G.n));
+  G.edgeCore = new Float32Array(G.e);
+  for (let k = 0; k < G.e; k++) G.edgeCore[k] = Math.min(G.coreRank[G.edges[2 * k]], G.coreRank[G.edges[2 * k + 1]]);
+}
+const coreRange = () => [state.core, 1];
+const nodeFilter = new DataFilterExtension({ filterSize: 1 });
+function coreLabel() {
+  if (!G?.edgeCore || state.core <= 0) return 'all nodes';
+  const K = sampleK();
+  const links = memo(`coreLinks|${state.core}|${K}`, () => {
+    let c = 0;
+    for (let k = 0; k < G.e; k++) if (G.edgeCore[k] >= state.core && (!G.edge_rank || G.edge_rank[k] <= K)) c++;
+    return c;
+  });
+  return `core ${Math.round((1 - state.core) * 100)}% of nodes · ${fmt(links)} links`;
 }
 
 // Traceroute-style sampling (edge_rank = first vantage tree using the link).
@@ -605,6 +645,11 @@ function edgeVisible(k) {
   return visibleNode(G.edges[2 * k]) && visibleNode(G.edges[2 * k + 1]);
 }
 
+// Links are filtered on the GPU by (sampling rank, shown by the toggles, core):
+// filtered vertices are culled in the vertex shader, so links switched off
+// cost nothing to rasterise, unlike drawing them with zero alpha.
+const edgeFilter = new DataFilterExtension({ filterSize: 3 });
+
 const TRANSITION = { duration: 1400, easing: (t) => t * t * (3 - 2 * t) };
 
 const showVectorsFor = (globeView) => state.renderer === 'vector' || globeView;
@@ -626,7 +671,13 @@ function networkLayers(globeView) {
     target[3] = edgeVisible(index) && !(hidden && hidden[index]) ? edgeColor[o + 3] * lf[index] * (hidden ? 0.5 : 1) : 0;
     return target;
   };
-  const edgeData = { length: G.e };
+  const edgeData = memo('edges', () => ({ length: G.e }));
+  const edgeFilterValue = (_, { index, target }) => {
+    target[0] = G.edge_rank ? G.edge_rank[index] : 0;
+    target[1] = edgeVisible(index) && !(hidden && hidden[index]) ? 1 : 0; // fiber members too
+    target[2] = G.edgeCore[index];
+    return target;
+  };
   const src = (_, { index, target }) => endPos(index, 0, target);
   const dst = (_, { index, target }) => endPos(index, 1, target);
   const layers = [];
@@ -642,14 +693,15 @@ function networkLayers(globeView) {
           _pathType: 'open',
           getColor: getEdgeColor,
           opacity,
-          extensions: G.edge_rank ? [new DataFilterExtension({ filterSize: 1 })] : [],
-          getFilterValue: (_, { index }) => (G.edge_rank ? G.edge_rank[index] : 0),
-          filterRange: [0, sampleK()],
+          visible: opacity > 0,
+          extensions: [edgeFilter],
+          getFilterValue: edgeFilterValue,
+          filterRange: [[0, sampleK()], [1, 1], coreRange()],
           getWidth: 1,
           widthUnits: 'pixels',
           billboard: true,
           parameters: blendParams(true),
-          updateTriggers: { getColor: colourTrig },
+          updateTriggers: { getColor: colourTrig, getFilterValue: colourTrig },
         }),
       );
     } else {
@@ -661,13 +713,14 @@ function networkLayers(globeView) {
           getTargetPosition: dst,
           getColor: getEdgeColor,
           opacity,
-          extensions: G.edge_rank ? [new DataFilterExtension({ filterSize: 1 })] : [],
-          getFilterValue: (_, { index }) => (G.edge_rank ? G.edge_rank[index] : 0),
-          filterRange: [0, sampleK()],
+          visible: opacity > 0,
+          extensions: [edgeFilter],
+          getFilterValue: edgeFilterValue,
+          filterRange: [[0, sampleK()], [1, 1], coreRange()],
           getWidth: 1,
           widthUnits: 'pixels',
           parameters: blendParams(false),
-          updateTriggers: { getSourcePosition: trig, getTargetPosition: trig, getColor: colourTrig },
+          updateTriggers: { getSourcePosition: trig, getTargetPosition: trig, getColor: colourTrig, getFilterValue: colourTrig },
           transitions: { getSourcePosition: TRANSITION, getTargetPosition: TRANSITION },
         }),
       );
@@ -675,7 +728,7 @@ function networkLayers(globeView) {
   }
 
   if (usePops() && showVectors && G.pop_routes) {
-    const routeData = { length: G.pop_routes.length / 2 };
+    const routeData = memo('routes', () => ({ length: G.pop_routes.length / 2 }));
     const rsrc = (_, { index, target }) => popPos(G.pop_routes[2 * index], target);
     const rdst = (_, { index, target }) => popPos(G.pop_routes[2 * index + 1], target);
     const rlf = routeLengthFactor();
@@ -726,11 +779,12 @@ function networkLayers(globeView) {
 
   // Selection: the selected AS's links, bright.
   if (state.selected !== null) {
-    const nb = G.neighbours(state.selected);
+    const nb = memo(`nb|${state.selected}`, () => G.neighbours(state.selected));
     const sideOf = (d) => (G.edges[2 * d.edge] === state.selected ? 0 : 1);
     const selColor = (d) => (G.edge_rel[d.edge] === -1 ? [255, 255, 255, 200] : [140, 220, 255, 150]);
     if (globeView) {
-      const data = buildArcs(nb.length, (k, a, b) => (endPos(nb[k].edge, sideOf(nb[k]), a), endPos(nb[k].edge, 1 - sideOf(nb[k]), b)), 0.05);
+      const data = memo(`sel-arcs|${state.selected}|${trig}`, () =>
+        buildArcs(nb.length, (k, a, b) => (endPos(nb[k].edge, sideOf(nb[k]), a), endPos(nb[k].edge, 1 - sideOf(nb[k]), b)), 0.05));
       layers.push(
         new PathLayer({
           id: 'sel-edges',
@@ -767,7 +821,7 @@ function networkLayers(globeView) {
   layers.push(
     new ScatterplotLayer({
       id: 'nodes',
-      data: { length: G.n },
+      data: memo('nodes', () => ({ length: G.n })),
       getPosition: (_, { index, target }) => pos(index, target),
       getRadius: (_, { index }) => (visibleNode(index) && !(pops && hasPops(index)) ? 0.6 + Math.log2(G.degree[index] + 1) * 0.55 : 0),
       getFillColor: (_, { index, target }) => {
@@ -782,6 +836,9 @@ function networkLayers(globeView) {
       billboard: true,
       radiusMinPixels: 0,
       radiusScale: sizeK,
+      extensions: [nodeFilter],
+      getFilterValue: (_, { index }) => G.coreRank[index],
+      filterRange: coreRange(),
       opacity: nodeOpacity,
       pickable: true,
       autoHighlight: true,
@@ -796,7 +853,7 @@ function networkLayers(globeView) {
     layers.push(
       new ScatterplotLayer({
         id: 'pops',
-        data: { length: G.pop_node.length },
+        data: memo('pops', () => ({ length: G.pop_node.length })),
         getPosition: (_, { index, target }) => popPos(index, target),
         getRadius: (_, { index }) => {
           const i = G.pop_node[index];
@@ -814,6 +871,9 @@ function networkLayers(globeView) {
         radiusUnits: 'pixels',
         billboard: true,
         radiusScale: sizeK,
+        extensions: [nodeFilter],
+        getFilterValue: (_, { index }) => G.coreRank[G.pop_node[index]],
+        filterRange: coreRange(),
         opacity: Math.min(1, nodeOpacity * 1.5),
         pickable: true,
         autoHighlight: true,
@@ -828,7 +888,7 @@ function networkLayers(globeView) {
     layers.push(
       new ScatterplotLayer({
         id: 'sel-node',
-        data: [state.selected],
+        data: memo(`sel|${state.selected}`, () => [state.selected]),
         getPosition: (i, { target }) => pos(i, target),
         getRadius: 9,
         radiusUnits: 'pixels',
@@ -887,7 +947,7 @@ function render() {
     if (map.getLayer('base')) map.setPaintProperty('base', 'raster-opacity', basemapOpacity());
   }
   syncControls();
-  writeHash();
+  writeHashSoon(); // browsers throttle history.replaceState; never per frame
 }
 
 // --- interaction ---------------------------------------------------------
@@ -1075,6 +1135,7 @@ function wireSearch() {
 
 function syncControls() {
   $('samplingLabel').textContent = G ? samplingLabel() : '';
+  $('coreLabel').textContent = G ? coreLabel() : '';
   const fib = state.fibers && G && fiberCache.value;
   $('fiberLabel').textContent = fib
     ? `~${Math.round(fiberCellSize() * 40075)} km cells · ${fmt(fib.fibers.length)} fibers carrying ${fmt(fib.bundled)} links`
@@ -1163,6 +1224,8 @@ function wireControls() {
   slider('altitude', 'altitude');
   $('sampling').value = Math.round(state.sampling * 100);
   slider('sampling', 'sampling');
+  $('core').value = Math.round(state.core * 100);
+  slider('core', 'core');
   $('fiberCell').value = Math.round(state.fiberCell * 100);
   slider('fiberCell', 'fiberCell');
   slider('fiberWidth', 'fiberWidth');
@@ -1209,7 +1272,9 @@ async function load(id) {
   routeLF = null;
   fiberCache = { key: null, value: null };
   arcCache.clear();
+  memoCache.clear();
   for (const k of Object.keys(lengthFactor)) delete lengthFactor[k];
+  computeCoreRank();
   lowerNames = G.names.map((s) => s.toLowerCase());
   buildColours();
   tilesMeta = {};
@@ -1272,6 +1337,13 @@ window.netmap = {
   state,
   render: () => render(),
   layers: () => (state.view === 'globe' ? globe?.props.layers : overlay._props?.layers || []).map((l) => l.id),
+  deck: () => (state.view === 'globe' ? globe : overlay._deck),
+  // what one zoom event costs on the main thread (perf probes)
+  zoomStep: (dz) => {
+    if (state.view === 'globe') globeZoom += dz;
+    else map.jumpTo({ zoom: map.getZoom() + dz });
+    render();
+  },
 };
 
 boot();
