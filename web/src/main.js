@@ -17,11 +17,13 @@ import expandLessIcon from '@material-design-icons/svg/filled/expand_less.svg?ra
 import searchIcon from '@material-design-icons/svg/filled/search.svg?raw';
 import controlPointIcon from '@material-design-icons/svg/filled/control_point.svg?raw';
 import closeIcon from '@material-design-icons/svg/filled/close.svg?raw';
+import expandMoreIcon from '@material-design-icons/svg/filled/expand_more.svg?raw';
 
 const ICONS = {
   hub: hubIcon,
   format_list_bulleted: listIcon,
   expand_less: expandLessIcon,
+  expand_more: expandMoreIcon,
   search: searchIcon,
   control_point: controlPointIcon,
   close: closeIcon,
@@ -113,6 +115,7 @@ const state = {
   selected: null, // the active waypoint's node, or null
   waypoints: [], // node per search row (-1 while a row has no pick yet)
   active: 0, // the row double-clicks and picks fill
+  expanded: true, // the active waypoint's card shown in full (and its links highlighted)
   hover: null,
 };
 
@@ -793,6 +796,7 @@ function networkLayers(globeView) {
       widthUnits: 'pixels',
       parameters: blendParams(globeView),
       updateTriggers: { getSourcePosition: trig, getTargetPosition: trig },
+      transitions: { getSourcePosition: TRANSITION, getTargetPosition: TRANSITION },
     };
     if (globeView) {
       const r = G.pop_routes;
@@ -818,11 +822,16 @@ function networkLayers(globeView) {
 
   if (fib) layers.push(...fiberLayers(globeView, opacity));
 
-  // Selection: the selected AS's links, bright.
-  if (state.selected !== null) {
+  // Selection: the active waypoint's links, while its card is expanded. A big
+  // network's hundreds of links would white out, so each dims with their
+  // number; peering links are fainter than transit.
+  if (state.selected !== null && state.expanded) {
     const nb = memo(`nb|${state.selected}`, () => G.neighbours(state.selected));
     const sideOf = (d) => (G.edges[2 * d.edge] === state.selected ? 0 : 1);
-    const selColor = (d) => (G.edge_rel[d.edge] === -1 ? [255, 255, 255, 200] : [140, 220, 255, 150]);
+    const dim = Math.min(1, Math.sqrt(40 / Math.max(nb.length, 1)));
+    const aT = Math.max(28, 210 * dim);
+    const aP = Math.max(14, 120 * dim);
+    const selColor = (d) => (G.edge_rel[d.edge] !== 0 ? [255, 255, 255, aT] : [140, 220, 255, aP]);
     if (globeView) {
       const data = memo(`sel-arcs|${state.selected}|${trig}`, () =>
         buildArcs(nb.length, (k, a, b) => (endPos(nb[k].edge, sideOf(nb[k]), a), endPos(nb[k].edge, 1 - sideOf(nb[k]), b)), 0.05));
@@ -832,7 +841,7 @@ function networkLayers(globeView) {
           data,
           _pathType: 'open',
           getColor: (_, { index }) => selColor(nb[index]),
-          getWidth: 1.5,
+          getWidth: nb.length > 200 ? 1 : 1.5,
           widthUnits: 'pixels',
           billboard: true,
           parameters: blendParams(true),
@@ -846,10 +855,11 @@ function networkLayers(globeView) {
           getSourcePosition: (d, { target }) => endPos(d.edge, sideOf(d), target),
           getTargetPosition: (d, { target }) => endPos(d.edge, 1 - sideOf(d), target),
           getColor: selColor,
-          getWidth: 1.5,
+          getWidth: nb.length > 200 ? 1 : 1.5,
           widthUnits: 'pixels',
           parameters: blendParams(false),
           updateTriggers: { getSourcePosition: trig, getTargetPosition: trig },
+          transitions: { getSourcePosition: TRANSITION, getTargetPosition: TRANSITION },
         }),
       );
     }
@@ -921,30 +931,33 @@ function networkLayers(globeView) {
         highlightColor: [255, 255, 255, 255],
         parameters: blendParams(globeView),
         updateTriggers: { getPosition: trig, getFillColor: `${showVectors}` },
+        transitions: { getPosition: TRANSITION },
       }),
     );
   }
 
-  // Route between waypoints: the edges of each leg, bright, on top.
+  // Route between waypoints, bright, on top, as one continuous line.
   if (pathEdges.length) {
     const key = `path|${state.waypoints.join(',')}`;
+    const segs = memo(key, routeSegments);
     const PATH = [255, 213, 74, 235];
     if (globeView) {
       const data = memo(`${key}|${trig}|arcs`, () =>
-        buildArcs(pathEdges.length, (k, a, b) => (endPos(pathEdges[k], 0, a), endPos(pathEdges[k], 1, b)), 0.05));
+        buildArcs(segs.length, (k, a, b) => (segEnd(segs[k][0], a), segEnd(segs[k][1], b)), 0.05));
       layers.push(new PathLayer({ id: 'path', data, _pathType: 'open', getColor: PATH, getWidth: 3, widthUnits: 'pixels', billboard: true, parameters: { depthCompare: 'always' } }));
     } else {
       layers.push(
         new LineLayer({
           id: 'path',
-          data: memo(key, () => pathEdges.slice()),
-          getSourcePosition: (k, { target }) => endPos(k, 0, target),
-          getTargetPosition: (k, { target }) => endPos(k, 1, target),
+          data: segs,
+          getSourcePosition: (d, { target }) => segEnd(d[0], target),
+          getTargetPosition: (d, { target }) => segEnd(d[1], target),
           getColor: PATH,
           getWidth: 3,
           widthUnits: 'pixels',
           parameters: { depthCompare: 'always' },
           updateTriggers: { getSourcePosition: trig, getTargetPosition: trig },
+          transitions: { getSourcePosition: TRANSITION, getTargetPosition: TRANSITION },
         }),
       );
     }
@@ -967,6 +980,7 @@ function networkLayers(globeView) {
         lineWidthMinPixels: 2,
         parameters: { depthCompare: 'always' },
         updateTriggers: { getPosition: trig },
+        transitions: { getPosition: TRANSITION },
       }),
     );
   }
@@ -1101,6 +1115,7 @@ function setWaypoint(k, node, { fly = false } = {}) {
   while (state.waypoints.length <= k) state.waypoints.push(-1);
   state.waypoints[k] = node;
   state.active = k;
+  state.expanded = true;
   waypointsChanged();
   if (fly) (routes[k] ? flyToRoute() : flyTo(node));
   setWaypointInfo(node);
@@ -1134,9 +1149,10 @@ async function setWaypointInfo(node) {
   if (state.waypoints.includes(node)) renderInfo();
 }
 
-function setActive(k) {
-  if (k === state.active) return;
+function setActive(k, expanded = state.expanded) {
+  if (k === state.active && expanded === state.expanded) return;
   state.active = k;
+  state.expanded = expanded;
   waypointsChanged();
 }
 
@@ -1160,6 +1176,32 @@ function clearWaypoints() {
   waypointsChanged();
 }
 
+// The route as drawn segments. Where a network is drawn at its points of
+// presence, consecutive links can meet it at different PoPs: the hop across
+// its own backbone between them is drawn too, as are the joins from each
+// waypoint's ring to where its first or last link attaches.
+//
+// Segments are described by what they join, not where it is: [v] is node v,
+// [v, k] is where link k attaches at v. So the list doesn't change with the
+// layout, and positions can glide when it does (joins that coincide in a
+// layout are just zero-length).
+function routeSegments() {
+  const segs = [];
+  for (const r of routes) {
+    if (!r || !r.edges.length) continue;
+    let at = [r.nodes[0]];
+    r.edges.forEach((k, j) => {
+      const a = [r.nodes[j], k];
+      const b = [r.nodes[j + 1], k];
+      segs.push([at, a], [a, b]);
+      at = b;
+    });
+    segs.push([at, [r.nodes[r.nodes.length - 1]]]);
+  }
+  return segs;
+}
+const segEnd = ([v, k], target) => (k === undefined ? pos(v, target) : endPos(k, G.edges[2 * k] === v ? 0 : 1, target));
+
 // The details stack: the active waypoint in full, the others compact.
 function renderInfo() {
   const many = state.waypoints.filter((w) => w >= 0).length > 1;
@@ -1169,20 +1211,28 @@ function renderInfo() {
     const rec = infoRecs.get(w);
     const num = many ? `<span class="wp-num">${k + 1}</span>` : '';
     const via = viaHTML(k);
-    if (k === state.active) {
+    const active = k === state.active ? ' active' : '';
+    if (k === state.active && state.expanded) {
       const body = rec ? detailsHTML(w, rec) : `<h2><span class="asn">AS${G.asn[w]}</span> ${esc(G.names[w])}</h2><p class="muted">loading…</p>`;
-      cards.push(`<section class="card wp active" data-k="${k}">${via}${body.replace('<h2>', `<h2>${num}`)}</section>`);
+      cards.push(`<section class="card wp full${active}" data-k="${k}">
+        <button class="icon-btn wp-toggle" title="Collapse" aria-label="Collapse">${ICONS.expand_less}</button>
+        ${via}${body.replace('<h2>', `<h2>${num}`)}</section>`);
     } else {
       const line = rec ? `${fmt(rec.degree)} links${rec.country ? ` · ${esc(rec.country)}` : ''}${rec.rank ? ` · rank #${fmt(rec.rank)}` : ''}` : '';
-      cards.push(`<section class="card wp compact" data-k="${k}" title="Show details">${via}
-        <h2>${num}<span class="asn">AS${G.asn[w]}</span> ${esc(G.names[w])}</h2><div class="line">${line}</div></section>`);
+      cards.push(`<section class="card wp compact${active}" data-k="${k}" title="Show details">
+        <button class="icon-btn wp-toggle" title="Expand" aria-label="Expand">${ICONS.expand_more}</button>
+        ${via}<h2>${num}<span class="asn">AS${G.asn[w]}</span> ${esc(G.names[w])}</h2><div class="line">${line}</div></section>`);
     }
   });
   $('infoCards').innerHTML = cards.join('');
+  $('infoCount').textContent = many ? `${cards.length} waypoints` : '';
   for (const card of $('infoCards').querySelectorAll('.wp.compact')) {
-    card.addEventListener('click', () => setActive(Number(card.dataset.k)));
+    card.addEventListener('click', () => setActive(Number(card.dataset.k), true));
   }
-  for (const li of $('infoCards').querySelectorAll('.wp.active .nbrs li')) {
+  for (const btn of $('infoCards').querySelectorAll('.wp.full .wp-toggle')) {
+    btn.addEventListener('click', () => setActive(state.active, false));
+  }
+  for (const li of $('infoCards').querySelectorAll('.wp.full .nbrs li')) {
     li.addEventListener('click', () => setWaypoint(state.active, Number(li.dataset.i), { fly: true }));
   }
   layoutCards();
@@ -1517,6 +1567,8 @@ function writeHash() {
   if (wps.length && G) {
     h.set('as', wps.map((w) => G.asn[w]).join(','));
     if (G.meta.kind === 'routers') h.set('pop', wps.join(',')); // which of each AS's PoPs
+    h.set('at', String(state.active + 1)); // the active waypoint (1-based)
+    h.set('open', state.expanded ? '1' : '0'); // its card expanded
   }
   history.replaceState(null, '', `#${h}`);
 }
@@ -1697,7 +1749,9 @@ async function load(id) {
     .filter((v) => v !== undefined);
   if (nodes.length) {
     nodes.forEach((v, k) => (state.waypoints[k] = v));
-    state.active = nodes.length - 1;
+    const at = Number(hash.get('at'));
+    state.active = Number.isInteger(at) && at >= 1 && at <= nodes.length ? at - 1 : nodes.length - 1;
+    state.expanded = hash.get('open') !== '0';
     waypointsChanged();
     for (const v of nodes) setWaypointInfo(v);
   }

@@ -101,7 +101,12 @@
     <button id="infoFab" class="fab" data-icon="format_list_bulleted" title="Show details" aria-label="Show details" hidden></button>
     <!-- one details card per waypoint; the active one in full, the others compact -->
     <aside id="info" hidden>
-      <button id="infoMin" class="icon-btn" data-icon="expand_less" title="Minimize" aria-label="Minimize details"></button>
+      <header class="card stack-head">
+        <i class="icon" data-icon="format_list_bulleted"></i>
+        <span>Details</span>
+        <span id="infoCount" class="sub"></span>
+        <button id="infoMin" class="icon-btn" data-icon="expand_less" title="Minimize" aria-label="Minimize details"></button>
+      </header>
       <div id="infoCards"></div>
     </aside>
 

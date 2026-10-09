@@ -98,11 +98,18 @@ svg { width: 24px; height: 24px; fill: currentColor; display: block; }
   overflow: auto;
   border-radius: 12px;
 }
-#info[hidden] { display: none; }
+#info[hidden] { display: none !important; }
+#info { display: flex; flex-direction: column; gap: 8px; }
+#info > * { flex: none; } /* scroll the stack, never squeeze its header */
 #infoCards { display: flex; flex-direction: column; gap: 8px; }
+.stack-head { display: flex; align-items: center; gap: 8px; margin: 0; padding: 4px 6px 4px 12px; font-weight: 600; }
+.stack-head .sub { flex: 1; font-weight: 400; font-size: 12px; }
+.wp { position: relative; }
+.wp-toggle { position: absolute; top: 4px; right: 4px; }
+.wp.full h2 { margin-right: 36px; }
+.wp.compact.active { border-color: rgba(255, 255, 255, 0.5); }
 #infoCards .card { max-height: none; overflow: visible; }
 #infoFab { position: absolute; top: 12px; right: 12px; z-index: 2; }
-#infoMin { position: absolute; top: 6px; right: 6px; z-index: 1; }
 .wp.compact { padding: 8px 12px; cursor: pointer; }
 .wp.compact:hover { border-color: rgba(127, 178, 255, 0.45); }
 .wp.compact h2 { font-size: 13px; margin: 0 28px 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
