@@ -133,8 +133,11 @@ svg { width: 24px; height: 24px; fill: currentColor; display: block; }
 .wp .via.warn { color: #ff9e7a; }
 
 /* the map is a crosshair; panning shows the grab hand */
-.maplibregl-canvas-container.maplibregl-interactive, #globe canvas { cursor: crosshair; }
-.maplibregl-canvas-container.maplibregl-interactive:active { cursor: grabbing; }
+/* (more specific than maplibre-gl.css, which is injected after this file) */
+#map .maplibregl-canvas-container.maplibregl-interactive,
+#map .maplibregl-canvas-container.maplibregl-interactive.maplibregl-track-pointer,
+#globe, #globe canvas { cursor: crosshair; }
+#map .maplibregl-canvas-container.maplibregl-interactive:active { cursor: grabbing; }
 
 header { display: flex; align-items: center; gap: 8px; margin: -4px -6px 8px 0; }
 header .sub { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

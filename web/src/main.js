@@ -963,6 +963,41 @@ function networkLayers(globeView) {
     }
   }
 
+  // A disc wherever the route touches a node (waypoints and every hop), big
+  // enough to hover and double-click.
+  if (pathEdges.length) {
+    const stops = memo(`path-stops|${state.waypoints.join(',')}`, () => {
+      const seen = new Set();
+      const out = [];
+      for (const [a, b] of routeSegments())
+        for (const d of [a, b]) {
+          const key = d.join(':');
+          if (!seen.has(key)) seen.add(key), out.push(d);
+        }
+      return out;
+    });
+    layers.push(
+      new ScatterplotLayer({
+        id: 'path-nodes',
+        data: stops,
+        getPosition: (d, { target }) => segEnd(d, target),
+        getRadius: 4,
+        radiusUnits: 'pixels',
+        billboard: true,
+        getFillColor: [255, 213, 74, 255],
+        stroked: true,
+        getLineColor: [20, 16, 4, 255],
+        lineWidthMinPixels: 1,
+        pickable: true,
+        autoHighlight: true,
+        highlightColor: [255, 255, 255, 255],
+        parameters: { depthCompare: 'always' },
+        updateTriggers: { getPosition: trig },
+        transitions: { getPosition: TRANSITION },
+      }),
+    );
+  }
+
   // A ring on each waypoint: white on the active one.
   const marked = state.waypoints.map((w, k) => [w, k]).filter(([w]) => w >= 0);
   if (marked.length) {
@@ -1038,6 +1073,7 @@ function pickedNode(info) {
   if (info.index < 0 || !info.layer) return null;
   if (info.layer.id === 'nodes') return info.index;
   if (info.layer.id === 'pops') return G.pop_node[info.index];
+  if (info.layer.id === 'path-nodes') return info.object[0];
   return null;
 }
 
@@ -1661,13 +1697,13 @@ function wireControls() {
   map.on('zoom', renderSoon);
   // Double-click a node to search it; elsewhere it still zooms.
   map.on('dblclick', (e) => {
-    const info = overlay.pickObject({ x: e.point.x, y: e.point.y, radius: 4, layerIds: ['nodes', 'pops'] });
+    const info = overlay.pickObject({ x: e.point.x, y: e.point.y, radius: 4, layerIds: ['path-nodes', 'nodes', 'pops'] });
     if (onDoubleClick(info)) e.preventDefault();
   });
   $('globe').addEventListener('dblclick', (e) => {
     if (!globe) return;
     const r = $('globe').getBoundingClientRect();
-    const info = globe.pickObject({ x: e.clientX - r.left, y: e.clientY - r.top, radius: 4, layerIds: ['nodes', 'pops'] });
+    const info = globe.pickObject({ x: e.clientX - r.left, y: e.clientY - r.top, radius: 4, layerIds: ['path-nodes', 'nodes', 'pops'] });
     if (!onDoubleClick(info) && globeCam) {
       globeCam = { ...globeCam, zoom: globeCam.zoom + 1, transitionDuration: 300 };
       globe.setProps({ initialViewState: globeCam });
