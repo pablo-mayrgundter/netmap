@@ -150,8 +150,51 @@ h1 { font-size: 18px; margin: 0; letter-spacing: 0.04em; }
    into a field; the add button below starts another row */
 #searchStack { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 #searchStack > * { pointer-events: auto; }
-#addWaypoint { background: var(--panel); border: 1px solid var(--line); box-shadow: var(--elev); margin-left: 4px; }
-#addWaypoint:disabled { background: var(--panel); }
+.stack-tools { display: flex; gap: 6px; margin-left: 4px; }
+.stack-tools .icon-btn { background: var(--panel); border: 1px solid var(--line); box-shadow: var(--elev); }
+.stack-tools .icon-btn:disabled { background: var(--panel); }
+#traceBtn[aria-expanded="true"] { color: var(--accent); border-color: rgba(127, 178, 255, 0.6); }
+
+/* traceroute import */
+#tracePanel { width: 420px; max-height: calc(100vh - 140px); }
+#tracePanel h2 { font-size: 14px; margin: 0 0 4px; }
+#tracePanel p { margin: 0 0 8px; font-size: 12px; }
+#tracePanel code { font-size: 11.5px; }
+#traceText {
+  width: 100%;
+  resize: vertical;
+  background: #0b0e15;
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  font: 11.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+#traceText:focus { outline: 1px solid rgba(127, 178, 255, 0.6); }
+#traceHops { list-style: none; margin: 8px 0; padding: 0; font-size: 12px; max-height: 30vh; overflow: auto; }
+#traceHops:empty { display: none; }
+#traceHops li { display: grid; grid-template-columns: 22px 108px 1fr; gap: 6px; padding: 2px 0; white-space: nowrap; }
+#traceHops li > span { overflow: hidden; text-overflow: ellipsis; }
+#traceHops .n { color: var(--muted); text-align: right; }
+#traceHops .ip { font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--muted); }
+#traceHops .ok .what { color: var(--fg); }
+#traceHops .skip .what { color: var(--muted); font-style: italic; }
+#traceHops .asn { color: #ffd54a; margin-right: 4px; }
+#traceHops .hint { color: #5adcff; margin-left: 4px; }
+#tracePanel .actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+#tracePanel .actions .muted { flex: 1; font-size: 12px; }
+.btn {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+.btn:hover { background: var(--hover); }
+.btn.primary { background: var(--accent); color: #05070c; border-color: transparent; font-weight: 600; }
+.btn.primary:disabled { opacity: 0.4; cursor: default; }
 .search-row.active { border-color: rgba(127, 178, 255, 0.6); }
 .search-row .remove { width: 30px; height: 30px; }
 .search-row .remove svg { width: 18px; height: 18px; }

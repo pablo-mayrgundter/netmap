@@ -9,6 +9,7 @@ import countries110 from 'world-atlas/countries-110m.json';
 
 import { listDatasets, loadBundle } from './data.js';
 import { route } from './route.js';
+import { parseTrace, loadLookups, resolveTrace, ipText } from './trace.js';
 
 // Material Icons (Apache-2.0), the same glyphs as MUI's icons, inlined as SVG.
 import hubIcon from '@material-design-icons/svg/filled/hub.svg?raw';
@@ -18,12 +19,14 @@ import searchIcon from '@material-design-icons/svg/filled/search.svg?raw';
 import controlPointIcon from '@material-design-icons/svg/filled/control_point.svg?raw';
 import closeIcon from '@material-design-icons/svg/filled/close.svg?raw';
 import expandMoreIcon from '@material-design-icons/svg/filled/expand_more.svg?raw';
+import uploadIcon from '@material-design-icons/svg/filled/upload.svg?raw';
 
 const ICONS = {
   hub: hubIcon,
   format_list_bulleted: listIcon,
   expand_less: expandLessIcon,
   expand_more: expandMoreIcon,
+  upload: uploadIcon,
   search: searchIcon,
   control_point: controlPointIcon,
   close: closeIcon,
@@ -1526,7 +1529,7 @@ function syncRows() {
   while (rows.length > want) rows.pop().remove();
   while (rows.length < want) {
     const row = makeRow(rows.length);
-    stack.insertBefore(row, add);
+    stack.insertBefore(row, stack.querySelector('.stack-tools'));
     wireRow(row);
     rows.push(row);
   }
@@ -1607,6 +1610,90 @@ function wireRow(row) {
   row.querySelector('.remove')?.addEventListener('click', () => removeWaypoint(kOf()));
 }
 
+// --- traceroute import ---------------------------------------------------
+// The upload button next to the control point opens a paste box; hops that
+// resolve to networks on this map replace the search stack as waypoints.
+
+let traceResult = null;
+function openTrace(open) {
+  $('tracePanel').hidden = !open;
+  $('traceBtn').setAttribute('aria-expanded', String(open));
+  if (open) {
+    $('traceText').focus();
+    loadLookups(DATA_BASE).catch(() => {}); // start the download early
+  }
+}
+
+async function updateTrace() {
+  const hops = parseTrace($('traceText').value);
+  const list = $('traceHops');
+  const use = $('traceUse');
+  use.disabled = true;
+  traceResult = null;
+  if (!hops.length) {
+    list.innerHTML = '';
+    $('traceSummary').textContent = $('traceText').value.trim() ? 'no hops found' : '';
+    return;
+  }
+  $('traceSummary').textContent = 'loading the network table…';
+  let L;
+  try {
+    L = await loadLookups(DATA_BASE);
+  } catch (err) {
+    $('traceSummary').textContent = `couldn't load the network table (${err.message})`;
+    return;
+  }
+  if (!G) return;
+  const r = resolveTrace(hops, L, G);
+  const why = { timeout: 'no reply', private: 'private address', unrouted: 'not routed in BGP', nameonly: 'name only: rerun with mtr -b or -n' };
+  list.innerHTML = r.rows
+    .map((h) => {
+      const ip = h.ip === null ? '*' : ipText(h.ip);
+      const hint = h.hint ? `<span class="hint">· ${h.hint.code} ${esc(h.hint.name)}</span>` : '';
+      const what =
+        h.status === 'ok'
+          ? `<span class="asn">AS${h.asn}</span>${esc(G.names[h.node])}${hint}`
+          : h.status === 'missing'
+            ? `<span class="asn">AS${h.asn}</span>not on this map${hint}`
+            : why[h.status];
+      return `<li class="${h.status === 'ok' ? 'ok' : 'skip'}" title="${esc(h.host || ip)}"><span class="n">${h.hop}</span><span class="ip">${ip}</span><span class="what">${what}</span></li>`;
+    })
+    .join('');
+  const ok = r.rows.filter((h) => h.status === 'ok').length;
+  $('traceSummary').textContent = `${ok} of ${r.rows.length} hops resolved → ${r.waypoints.length} waypoint${r.waypoints.length === 1 ? '' : 's'}`;
+  traceResult = r;
+  use.disabled = !r.waypoints.length;
+}
+
+function useTrace() {
+  if (!traceResult?.waypoints.length) return;
+  state.waypoints = traceResult.waypoints.slice();
+  state.active = state.waypoints.length - 1;
+  state.expanded = true;
+  state.explore = null;
+  waypointsChanged();
+  for (const v of state.waypoints) setWaypointInfo(v);
+  flyToRoute();
+  openTrace(false);
+}
+
+function wireTrace() {
+  let timer = null;
+  $('traceBtn').addEventListener('click', () => openTrace($('tracePanel').hidden));
+  $('traceCancel').addEventListener('click', () => openTrace(false));
+  $('traceUse').addEventListener('click', useTrace);
+  $('traceText').addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(updateTrace, 200);
+  });
+  $('traceText').addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      openTrace(false);
+    } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) useTrace();
+  });
+}
+
 function wireSearch() {
   const row0 = rowEl(0);
   wireRow(row0);
@@ -1616,6 +1703,7 @@ function wireSearch() {
     else openRow(0, true);
   });
   $('addWaypoint').addEventListener('click', addWaypoint);
+  wireTrace();
 }
 
 // --- controls ------------------------------------------------------------
@@ -1745,6 +1833,7 @@ function wireControls() {
     state.active = 0;
     state.selected = null;
     state.explore = null;
+    traceResult = null;
     pathEdges = [];
     routes = [];
     syncRows();
@@ -1803,6 +1892,7 @@ async function load(id) {
   arcCache.clear();
   memoCache.clear();
   infoRecs.clear();
+  if (!$('tracePanel').hidden) setTimeout(updateTrace); // re-resolve on the new map
   for (const k of Object.keys(lengthFactor)) delete lengthFactor[k];
   computeCoreRank();
   lowerNames = G.names.map((s) => s.toLowerCase());
