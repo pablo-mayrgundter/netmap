@@ -5,6 +5,9 @@
   --muted: #8a90a0;
   --accent: #7fb2ff;
   --line: rgba(255, 255, 255, 0.1);
+  --hover: rgba(255, 255, 255, 0.08);
+  /* Material dark elevation 2 */
+  --elev: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 6px 2px rgba(0, 0, 0, 0.15);
   color-scheme: dark;
 }
 
@@ -22,25 +25,178 @@ html, body {
 #map, #globe { position: absolute; inset: 0; }
 #map[hidden], #globe[hidden] { display: none; }
 
-#panel, #info {
-  position: absolute;
-  top: 12px;
+/* --- surfaces (Material design language, no framework) ------------------ */
+
+.card, .fab, .toolbar {
   background: var(--panel);
   backdrop-filter: blur(6px);
   border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 12px 14px;
-  z-index: 2;
-  max-height: calc(100% - 24px);
-  overflow: auto;
+  box-shadow: var(--elev);
 }
+.card { border-radius: 12px; padding: 12px 14px; max-height: calc(100vh - 24px); overflow: auto; }
 
-#panel { left: 12px; width: 268px; }
-#info { right: 12px; width: 320px; }
+/* Icons are Material Icons SVGs (inlined at build time), sized like MUI's. */
+svg { width: 24px; height: 24px; fill: currentColor; display: block; }
+.icon svg { width: 22px; height: 22px; }
+.icon { color: var(--accent); display: inline-flex; }
 
-header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.icon-btn {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+}
+.icon-btn:hover { background: var(--hover); color: var(--fg); }
+.icon-btn:disabled { opacity: 0.35; cursor: default; background: transparent; }
+.icon-btn:focus-visible, .fab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.fab {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  cursor: pointer;
+  pointer-events: auto;
+  transition: background 120ms;
+}
+.fab:hover { background: rgba(28, 32, 44, 0.92); }
+.fab[hidden], .card[hidden] { display: none; }
+
+/* top-left dock: controls card (or its FAB), then the search toolbar */
+#dock {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 2;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  pointer-events: none; /* the map stays draggable between the pieces */
+}
+#dock > * { pointer-events: auto; }
+#panel { width: 268px; }
+
+/* details: a stack of cards, one per waypoint; scrolls when it outgrows the screen */
+#info {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 320px;
+  z-index: 2;
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+  border-radius: 12px;
+}
+#info[hidden] { display: none !important; }
+#info { display: flex; flex-direction: column; gap: 8px; }
+#info > * { flex: none; } /* scroll the stack, never squeeze its header */
+#infoCards { display: flex; flex-direction: column; gap: 8px; }
+.stack-head { display: flex; align-items: center; gap: 8px; margin: 0; padding: 4px 6px 4px 12px; font-weight: 600; }
+.stack-head .sub { flex: 1; font-weight: 400; font-size: 12px; }
+.wp { position: relative; }
+.wp-toggle { position: absolute; top: 4px; right: 4px; }
+.wp.full h2 { margin-right: 36px; }
+.wp.compact.active { border-color: rgba(255, 255, 255, 0.5); }
+.wp.explore { border-color: rgba(90, 220, 255, 0.55); }
+.wp .via.explore-tag { color: #5adcff; }
+#infoCards .card { max-height: none; overflow: visible; }
+#infoFab { position: absolute; top: 12px; right: 12px; z-index: 2; }
+.wp.compact { padding: 8px 12px; cursor: pointer; }
+.wp.compact:hover { border-color: rgba(127, 178, 255, 0.45); }
+.wp.compact h2 { font-size: 13px; margin: 0 28px 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wp.compact .line { color: var(--muted); font-size: 12px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wp-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  margin-right: 6px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #05070c;
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: 2px;
+}
+.wp .via { color: #ffd54a; font-size: 12px; margin: 0 0 6px; }
+.wp .via.warn { color: #ff9e7a; }
+
+/* the map is a crosshair; panning shows the grab hand */
+/* (more specific than maplibre-gl.css, which is injected after this file) */
+#map .maplibregl-canvas-container.maplibregl-interactive,
+#map .maplibregl-canvas-container.maplibregl-interactive.maplibregl-track-pointer,
+#globe, #globe canvas { cursor: crosshair; }
+#map .maplibregl-canvas-container.maplibregl-interactive:active { cursor: grabbing; }
+
+header { display: flex; align-items: center; gap: 8px; margin: -4px -6px 8px 0; }
+header .sub { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 h1 { font-size: 18px; margin: 0; letter-spacing: 0.04em; }
 .sub { color: var(--muted); }
+
+/* search: a stack of rows (waypoints), each an icon that expands right
+   into a field; the add button below starts another row */
+#searchStack { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+#searchStack > * { pointer-events: auto; }
+#addWaypoint { background: var(--panel); border: 1px solid var(--line); box-shadow: var(--elev); margin-left: 4px; }
+#addWaypoint:disabled { background: var(--panel); }
+.search-row.active { border-color: rgba(127, 178, 255, 0.6); }
+.search-row .remove { width: 30px; height: 30px; }
+.search-row .remove svg { width: 18px; height: 18px; }
+.toolbar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 44px;
+  padding: 0 4px;
+  border-radius: 22px;
+}
+.toolbar .field { width: 0; overflow: hidden; transition: width 180ms ease; }
+.toolbar.open .field { width: 260px; overflow: visible; }
+.toolbar input {
+  width: 100%;
+  height: 32px;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 14px;
+  padding: 0 10px 0 4px;
+  outline: none;
+}
+.results {
+  position: absolute;
+  z-index: 3;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  max-height: 50vh;
+  overflow: auto;
+  background: var(--panel);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--elev);
+}
+.results:empty, .toolbar:not(.open) .results { display: none; }
+.results li { padding: 6px 8px; cursor: pointer; border-radius: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.results li:hover, .results li.active { background: rgba(127, 178, 255, 0.18); }
+.results .asn { color: var(--accent); margin-right: 6px; font-variant-numeric: tabular-nums; }
 
 #banner {
   background: rgba(255, 180, 40, 0.14);
@@ -55,7 +211,7 @@ h1 { font-size: 18px; margin: 0; letter-spacing: 0.04em; }
 .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0; }
 .row > span, .label { color: var(--muted); min-width: 64px; }
 .group { display: flex; align-items: center; justify-content: space-between; margin: 6px 0; }
-select, input[type="search"] {
+select {
   background: #161a24;
   color: var(--fg);
   border: 1px solid var(--line);
@@ -84,18 +240,11 @@ input[type="range"] { flex: 1; accent-color: var(--accent); }
 details { margin: 8px 0; border-top: 1px solid var(--line); padding-top: 6px; }
 summary { cursor: pointer; color: var(--muted); }
 
-.search { position: relative; margin: 10px 0 6px; }
-.search input { width: 100%; }
-#results { list-style: none; margin: 4px 0 0; padding: 0; max-height: 180px; overflow: auto; }
-#results li { padding: 3px 4px; cursor: pointer; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#results li:hover, #results li.active { background: rgba(127, 178, 255, 0.18); }
-#results .asn { color: var(--accent); margin-right: 6px; font-variant-numeric: tabular-nums; }
-
 #legend { list-style: none; padding: 0; margin: 8px 0 4px; display: grid; grid-template-columns: 1fr 1fr; gap: 2px 8px; font-size: 12px; }
 #legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; box-shadow: 0 0 6px currentColor; }
 #stats { color: var(--muted); font-size: 11px; margin: 4px 0 0; }
 
-#info h2 { margin: 0 24px 2px 0; font-size: 16px; }
+#info h2 { margin: 0 32px 2px 0; font-size: 16px; }
 #info .asn { color: var(--accent); font-weight: 600; }
 #info dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 8px 0; }
 #info dt { color: var(--muted); }
@@ -106,7 +255,6 @@ summary { cursor: pointer; color: var(--muted); }
 #info .prefixes { columns: 2; font-family: ui-monospace, monospace; font-size: 11.5px; list-style: none; padding: 0; }
 #info .nbrs li { cursor: pointer; }
 #info .nbrs li:hover { color: var(--accent); }
-#close { position: absolute; top: 6px; right: 8px; background: none; border: 0; color: var(--muted); font-size: 20px; cursor: pointer; }
 
 #tooltip {
   position: absolute;
@@ -124,6 +272,9 @@ summary { cursor: pointer; color: var(--muted); }
 .maplibregl-ctrl-attrib a { color: var(--muted); }
 
 @media (max-width: 720px) {
-  #panel { width: calc(100% - 24px); max-height: 46%; }
-  #info { top: auto; bottom: 12px; width: calc(100% - 24px); max-height: 44%; }
+  #dock { right: 12px; flex-wrap: wrap; }
+  #panel { width: calc(100vw - 24px); max-height: 46vh; }
+  .toolbar.open .field { width: calc(100vw - 100px); }
+  #info { top: auto; bottom: 12px; width: calc(100% - 24px); max-height: 44vh; }
+  #infoFab { top: auto; bottom: 12px; }
 }

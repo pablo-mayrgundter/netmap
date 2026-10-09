@@ -10,10 +10,15 @@
     <div id="map"></div>
     <div id="globe" hidden></div>
 
-    <aside id="panel">
+    <!-- top-left: the controls card (or its icon) and the search toolbar beside it -->
+    <div id="dock">
+    <button id="panelFab" class="fab" data-icon="hub" title="Show controls" aria-label="Show controls" hidden></button>
+    <aside id="panel" class="card">
       <header>
+        <i class="icon" data-icon="hub"></i>
         <h1>netmap</h1>
         <span class="sub">maps of cyberspace</span>
+        <button id="panelMin" class="icon-btn" data-icon="expand_less" title="Minimize" aria-label="Minimize controls"></button>
       </header>
       <div id="banner" hidden></div>
 
@@ -76,18 +81,33 @@
         <label class="check"><input id="glow" type="checkbox" checked /> additive glow</label>
       </details>
 
-      <div class="search">
-        <input id="search" type="search" placeholder="Find AS number or name…" autocomplete="off" />
-        <ul id="results"></ul>
-      </div>
-
       <ul id="legend"></ul>
       <p id="stats"></p>
     </aside>
 
+    <!-- search rows: each is a waypoint; double-clicking a node fills the active one -->
+    <div id="searchStack">
+      <div class="toolbar search-row" data-k="0">
+        <button class="icon-btn search-btn" data-icon="search" title="Search (/)" aria-label="Search" aria-expanded="false"></button>
+        <div class="field">
+          <input type="search" placeholder="Find AS number or name…" autocomplete="off" tabindex="-1" />
+          <ul class="results" role="listbox"></ul>
+        </div>
+      </div>
+      <button id="addWaypoint" class="icon-btn" data-icon="control_point" title="Add a waypoint: route from the last search to another node" aria-label="Add waypoint" disabled></button>
+    </div>
+    </div>
+
+    <button id="infoFab" class="fab" data-icon="format_list_bulleted" title="Show details" aria-label="Show details" hidden></button>
+    <!-- one details card per waypoint; the active one in full, the others compact -->
     <aside id="info" hidden>
-      <button id="close" aria-label="Close">×</button>
-      <div id="infoBody"></div>
+      <header class="card stack-head">
+        <i class="icon" data-icon="format_list_bulleted"></i>
+        <span>Details</span>
+        <span id="infoCount" class="sub"></span>
+        <button id="infoMin" class="icon-btn" data-icon="expand_less" title="Minimize" aria-label="Minimize details"></button>
+      </header>
+      <div id="infoCards"></div>
     </aside>
 
     <div id="tooltip" hidden></div>

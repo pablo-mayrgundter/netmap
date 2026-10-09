@@ -51,7 +51,11 @@ export async function loadBundle(base, id) {
   }
 
   const byAsn = new Map();
-  for (let i = 0; i < n; i++) byAsn.set(a.asn[i], i);
+  // an AS's best-connected node (router maps have one per PoP)
+  for (let i = 0; i < n; i++) {
+    const j = byAsn.get(a.asn[i]);
+    if (j === undefined || a.degree[i] > a.degree[j]) byAsn.set(a.asn[i], i);
+  }
 
   const infoCache = new Map();
   async function info(i) {
