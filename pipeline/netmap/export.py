@@ -24,7 +24,8 @@ FORMAT_VERSION = 1
 
 def write_bundle(out: Path, *, name: str, topo, metrics, prof_rows, layouts, region_idx,
                  has_geo, pinned, names, info_records, attribution: list[str],
-                 backbone=None, sample_rank=None, pops=None):
+                 backbone=None, sample_rank=None, pops=None, edge_weight=None,
+                 kind: str = "as"):
     out.mkdir(parents=True, exist_ok=True)
     n, e = topo.n, topo.e
     flags = has_geo.astype(np.uint8) | (pinned.astype(np.uint8) << 1)
@@ -47,6 +48,8 @@ def write_bundle(out: Path, *, name: str, topo, metrics, prof_rows, layouts, reg
         ("edge_rank", (np.zeros(e) if sample_rank is None else sample_rank).astype(np.uint8), [e]),
         ("edge_backbone", (np.ones(e, bool) if backbone is None else backbone).astype(np.uint8), [e]),
     ]
+    if edge_weight is not None:
+        sections.append(("edge_weight", np.asarray(edge_weight).astype(np.uint32), [e]))
     if pops is not None:
         pp, plon, plat = pops
         sections += [
@@ -74,6 +77,7 @@ def write_bundle(out: Path, *, name: str, topo, metrics, prof_rows, layouts, reg
         "name": name,
         "generated": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
         "synthetic": bool(topo.synthetic),
+        "kind": kind,  # "as": nodes are ASes; "routers": nodes are (AS, city) PoPs from ITDK
         "source": topo.source,
         "notes": topo.notes,
         "counts": {

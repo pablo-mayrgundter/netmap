@@ -295,6 +295,63 @@ def test_native_lgl_deterministic_and_sane():
     assert np.isfinite(c).all()
 
 
+def hub_and_spoke_graph(hubs=12, spokes=40, seed=0):
+    """A ring of hubs plus a few chords, each hub with its own spokes (leaves)."""
+    rng = np.random.default_rng(seed)
+    edges = [(h, (h + 1) % hubs) for h in range(hubs)]
+    edges += [tuple(rng.choice(hubs, 2, replace=False)) for _ in range(hubs // 3)]
+    n = hubs
+    for h in range(hubs):
+        for _ in range(spokes):
+            edges.append((h, n))
+            n += 1
+    el = np.asarray(edges, np.int32)
+    return n, el
+
+
+def spoke_quality(xy, n, el, hubs):
+    """(evenness, ownership): how evenly each hub's spokes surround it (1 =
+    perfectly, 0 = all on one side) and the share of spokes nearer their own
+    hub than any other hub."""
+    owner = np.full(n, -1)
+    owner[el[el[:, 0] < hubs][:, 1]] = el[el[:, 0] < hubs][:, 0]
+    leaf = owner >= 0
+    leaf[:hubs] = False
+    even = []
+    for h in range(hubs):
+        v = xy[leaf & (owner == h)] - xy[h]
+        u = v / np.maximum(np.hypot(*v.T), 1e-12)[:, None]
+        even.append(1 - np.hypot(*u.mean(0)))
+    d = np.hypot(xy[leaf, None, 0] - xy[None, :hubs, 0], xy[leaf, None, 1] - xy[None, :hubs, 1])
+    own = np.mean(d.argmin(1) == owner[leaf])
+    return float(np.mean(even)), float(own)
+
+
+def test_native_lgl_opte_hub_and_spoke():
+    """A hub-and-spoke topology must render as hub and spoke: each hub's
+    spokes all around it, nearer to it than to other hubs."""
+    from netmap import native
+
+    try:
+        native.load()
+    except native.NativeUnavailable:
+        pytest.skip("no C compiler")
+    hubs = 12
+    n, el = hub_and_spoke_graph(hubs)
+    a, lev = native.lgl_opte(n, el[:, 0], el[:, 1], seed=3, threads=1, return_levels=True)
+    b = native.lgl_opte(n, el[:, 0], el[:, 1], seed=3, threads=4)
+    assert np.isfinite(a).all() and np.array_equal(a, b)  # same for any thread count
+    assert lev.min() == 0 and lev.max() >= 2
+    even, own = spoke_quality(a, n, el, hubs)
+    assert even > 0.85 and own > 0.9, (even, own)
+    # Default lglayout mode (all edges, no leaves-close) still lays it out.
+    c = native.lgl_opte(n, el[:, 0], el[:, 1], tree_only=False, leaves_close=False, seed=3)
+    assert np.isfinite(c).all()
+    # Disconnected input: one tree per component, nothing rejected.
+    d = native.lgl_opte(4, np.array([0, 2], np.int32), np.array([1, 3], np.int32))
+    assert np.isfinite(d).all()
+
+
 def test_native_sample_rank_bfs_and_dijkstra():
     from netmap import native
 
@@ -328,3 +385,41 @@ def test_tile_pool_matches_single_process(tmp_path):
     f2 = sorted(p.relative_to(tmp_path / "t2") for p in (tmp_path / "t2").rglob("*.png"))
     assert f1 == f2
     assert all((tmp_path / "t1" / f).read_bytes() == (tmp_path / "t2" / f).read_bytes() for f in f1)
+
+
+def test_itdk_aggregate_to_pops(tmp_path):
+    pytest.importorskip("pandas")
+    from netmap import itdk
+
+    def bz(name, text):
+        p = tmp_path / name
+        p.write_bytes(bz2.compress(text.encode()))
+        return p
+
+    # AS 10 has routers in Paris (N1, N2) and London (N3); AS 20 in London (N4).
+    files = {
+        "nodes.as": bz("as.bz2", "# c\nnode.AS\tN1\t10\torigins\nnode.AS\tN2\t10\torigins\n"
+                       "node.AS\tN3\t10\trefinement\nnode.AS\tN4\t20\tlasthop\nnode.AS\tN5\t-1\tunknown\n"),
+        "nodes.geo": bz("geo.bz2", "# c\n"
+                        "node.geo N1:\tEU\tFR\tIDF\tParis\t48.85\t2.35\t\t\thoiho\n"
+                        "node.geo N2:\tEU\tFR\tIDF\tParis\t48.86\t2.34\t\t\thoiho\n"
+                        "node.geo N3:\tEU\tGB\tENG\tLondon\t51.50\t-0.12\t\t\tmaxmind\n"
+                        "node.geo N4:\tEU\tGB\tENG\tLondon\t51.51\t-0.13\t\t\tix\n"),
+        "links": bz("links.bz2", "# c\n"
+                    "link L1:  N1:1.1.1.1 N3:1.1.1.2\n"      # AS10 Paris-London (backbone)
+                    "link L2:  N2 N3\n"                       # again: weight 2
+                    "link L3:  N3:2.2.2.1 N4:2.2.2.2 N5\n"   # AS10-AS20 London; N5 has no PoP
+                    "link L4:  N1 N2\n"),                     # inside the Paris PoP: dropped
+    }
+    agg = itdk.aggregate(files, tmp_path / "cache")
+    assert len(agg["pop_asn"]) == 3 and sorted(agg["routers"].tolist()) == [1, 1, 2]
+    lab = {i: (int(agg["pop_asn"][i]), str(agg["places"][agg["pop_place"][i]]).split("|")[-1])
+           for i in range(3)}
+    links = {tuple(sorted((lab[s], lab[d]))): int(w) for s, d, w in zip(agg["src"], agg["dst"], agg["weight"])}
+    assert links == {((10, "London"), (10, "Paris")): 2, ((10, "London"), (20, "London")): 1}
+    # cached on second call
+    assert (tmp_path / "cache" / "pops.npz").exists()
+    p = itdk.prune(agg, min_routers=2)
+    assert len(p["pop_asn"]) == 0  # the only 2-router PoP has no remaining links
+    mask = itdk.max_spanning_forest(3, agg["src"], agg["dst"], agg["weight"])
+    assert mask.all()  # a tree already

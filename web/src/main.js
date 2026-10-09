@@ -63,6 +63,7 @@ const PARAMS = [
   ['edgeAlpha', 'edges', 'num', 0.05],
   ['nodeSize', 'nodes', 'num', 0],
   ['sampling', 'sample', 'num', 0], // 0 = one vantage tree .. 1 = every link
+  ['core', 'core', 'num', 0], // hide this fraction of nodes, least core first
   ['altitude', 'alt', 'num', 0.2],
   ['showTransit', 'transit', 'bool', true],
   ['showPeering', 'peering', 'bool', true],
@@ -223,7 +224,10 @@ function buildColours() {
     edgeColor[k * 4] = (a[0] + b[0]) >> 1;
     edgeColor[k * 4 + 1] = (a[1] + b[1]) >> 1;
     edgeColor[k * 4 + 2] = (a[2] + b[2]) >> 1;
-    edgeColor[k * 4 + 3] = G.edge_rel[k] === -1 ? 255 : 190;
+    // transit and intra-AS backbone brighter than peering; router-level
+    // bundles brighten with log(number of router links)
+    const w = G.edge_weight ? Math.min(1, 0.35 + 0.18 * Math.log2(1 + G.edge_weight[k])) : 1;
+    edgeColor[k * 4 + 3] = (G.edge_rel[k] === 0 ? 190 : 255) * w;
   }
 }
 
@@ -366,6 +370,19 @@ function buildArcs(count, ends, liftK) {
   return { length: count, startIndices, attributes: { getPath: { value: path, size: 3 } } };
 }
 
+// deck.gl compares `data` by reference: a fresh object on every render (each
+// zoom event) makes it recompute every attribute of every layer. So layer data
+// objects are memoised on what they depend on.
+const memoCache = new Map();
+function memo(key, make) {
+  const k = `${G?.id}|${key}`;
+  if (!memoCache.has(k)) {
+    if (memoCache.size > 32) memoCache.clear();
+    memoCache.set(k, make());
+  }
+  return memoCache.get(k);
+}
+
 const arcCache = new Map();
 function cachedArcs(key, count, ends, liftK) {
   if (!arcCache.has(key)) {
@@ -390,7 +407,7 @@ function fiberCellSize() {
 let fiberCache = { key: null, value: null };
 function computeFibers() {
   const K = sampleK();
-  const key = `${state.mode}|${usePops()}|${state.fiberCell}|${K}|${state.showTransit}|${state.showPeering}|${state.backboneOnly}|${state.view}|${state.altitude}`;
+  const key = `${state.mode}|${usePops()}|${state.fiberCell}|${K}|${state.core}|${state.showTransit}|${state.showPeering}|${state.backboneOnly}|${state.view}|${state.altitude}`;
   if (fiberCache.key === key) return fiberCache.value;
   const cell = fiberCellSize();
   const inv = 1 / cell;
@@ -402,6 +419,7 @@ function computeFibers() {
   const a = [0, 0, 0];
   const b = [0, 0, 0];
   const lf = edgeLengthFactor(state.mode);
+  const cut = coreCut();
   const index = new Map();
   const edgeBundle = new Int32Array(G.e).fill(-1);
   // per-bundle accumulators (grown as needed)
@@ -409,8 +427,10 @@ function computeFibers() {
   const NF = 13;
   let acc = new Float64Array(cap * NF); // ax ay az bx by bz r g b count transit peering inkSum
   let nb = 0;
+  let members = new Uint32Array(cap);
   for (let k = 0; k < G.e; k++) {
     if (G.edge_rank && G.edge_rank[k] > K) continue;
+    if (G.edgeCore[k] < cut) continue;
     if (!edgeVisible(k)) continue;
     endPos(k, 0, a);
     endPos(k, 1, b);
@@ -429,6 +449,9 @@ function computeFibers() {
         const grown = new Float64Array(cap * 2 * NF);
         grown.set(acc);
         acc = grown;
+        const gm = new Uint32Array(cap * 2);
+        gm.set(members);
+        members = gm;
         cap *= 2;
       }
     }
@@ -437,14 +460,16 @@ function computeFibers() {
     acc[o] += sx, acc[o + 1] += sy, acc[o + 2] += sz;
     acc[o + 3] += tx, acc[o + 4] += ty, acc[o + 5] += tz;
     acc[o + 6] += edgeColor[k * 4], acc[o + 7] += edgeColor[k * 4 + 1], acc[o + 8] += edgeColor[k * 4 + 2];
-    acc[o + 9] += 1;
-    acc[o + (G.edge_rel[k] === -1 ? 10 : 11)] += 1;
+    const wk = G.edge_weight ? G.edge_weight[k] : 1; // router links on router maps
+    acc[o + 9] += wk;
+    acc[o + (G.edge_rel[k] === 0 ? 11 : 10)] += wk;
     acc[o + 12] += (edgeColor[k * 4 + 3] / 255) * lf[k]; // the link's own brightness
     edgeBundle[k] = bi;
+    members[bi]++;
   }
   // keep bundles with enough members, biggest last (drawn on top)
   const keep = [];
-  for (let i = 0; i < nb; i++) if (acc[i * NF + 9] >= FIBER_MIN) keep.push(i);
+  for (let i = 0; i < nb; i++) if (members[i] >= FIBER_MIN) keep.push(i);
   keep.sort((x, y) => acc[x * NF + 9] - acc[y * NF + 9]);
   const remap = new Int32Array(nb).fill(-1);
   keep.forEach((bi, j) => (remap[bi] = j));
@@ -488,10 +513,10 @@ function fiberLayers(globeView, opacity) {
   const fOpacity = Math.min(1, opacity * 1.5);
   const make = (id, width, k, pickable) => {
     if (globeView) {
-      const data = buildArcs(fibers.length, (i, a, b) => {
+      const data = memo(`fiber-arcs|${fiberCache.key}`, () => buildArcs(fibers.length, (i, a, b) => {
         a[0] = fibers[i].source[0], a[1] = fibers[i].source[1], a[2] = fibers[i].source[2];
         b[0] = fibers[i].target[0], b[1] = fibers[i].target[1], b[2] = fibers[i].target[2];
-      }, 0.04);
+      }, 0.04));
       return new PathLayer({
         id,
         data,
@@ -503,6 +528,7 @@ function fiberLayers(globeView, opacity) {
         opacity: fOpacity,
         pickable,
         parameters: blendParams(true),
+        updateTriggers: { getColor: state.fiberWidth, getWidth: state.fiberWidth }, // alpha ~ ink / width
       });
     }
     return new LineLayer({
@@ -516,7 +542,7 @@ function fiberLayers(globeView, opacity) {
       opacity: fOpacity,
       pickable,
       parameters: blendParams(false),
-      updateTriggers: { getColor: fiberCache.key, getWidth: `${fiberCache.key}|${state.fiberWidth}` },
+      updateTriggers: { getColor: `${fiberCache.key}|${state.fiberWidth}`, getWidth: `${fiberCache.key}|${state.fiberWidth}` },
     });
   };
   // a faint halo under a core that carries most of the ink
@@ -540,6 +566,38 @@ function blendParams(globeView) {
   p.depthWriteEnabled = false;
   p.depthCompare = globeView ? 'less-equal' : 'always';
   return p;
+}
+
+// Core slider: rank nodes by hierarchy level (ties by degree) so the slider
+// hides that fraction of nodes, edge first, keeping the core routes. A link
+// is as core as its less-core end. Applied as a GPU filter range: instant.
+function computeCoreRank() {
+  const order = Array.from({ length: G.n }, (_, i) => i);
+  order.sort((a, b) => G.level[a] - G.level[b] || G.degree[a] - G.degree[b]);
+  G.coreRank = new Float32Array(G.n);
+  order.forEach((v, r) => (G.coreRank[v] = r / G.n));
+  G.edgeCore = new Float32Array(G.e);
+  for (let k = 0; k < G.e; k++) G.edgeCore[k] = Math.min(G.coreRank[G.edges[2 * k]], G.coreRank[G.edges[2 * k + 1]]);
+}
+// Slider position -> fraction of nodes kept, log scale: 100% at the left
+// down to the top 0.5% (a few hundred core networks) at the right.
+const CORE_MIN_KEEP = 0.005;
+const coreKeep = () => Math.pow(CORE_MIN_KEEP, state.core);
+const coreCut = () => (state.core > 0 ? 1 - coreKeep() : 0); // coreRank threshold
+const coreRange = () => [coreCut(), 1];
+const nodeFilter = new DataFilterExtension({ filterSize: 1 });
+function coreLabel() {
+  if (!G?.edgeCore || state.core <= 0) return 'all nodes';
+  const cut = coreCut();
+  const K = sampleK();
+  const links = memo(`coreLinks|${state.core}|${K}`, () => {
+    let c = 0;
+    for (let k = 0; k < G.e; k++) if (G.edgeCore[k] >= cut && (!G.edge_rank || G.edge_rank[k] <= K)) c++;
+    return c;
+  });
+  const keep = coreKeep();
+  const pct = keep >= 0.1 ? Math.round(keep * 100) : +(keep * 100).toFixed(1);
+  return `keeping the core ${pct}% (${fmt(Math.round(keep * G.n))} nodes) · ${fmt(links)} links`;
 }
 
 // Traceroute-style sampling (edge_rank = first vantage tree using the link).
@@ -590,10 +648,16 @@ function renderSoon() {
 function edgeVisible(k) {
   if (state.backboneOnly && G.edge_backbone && !G.edge_backbone[k]) return false;
   const rel = G.edge_rel[k];
-  if (rel === -1 && !state.showTransit) return false;
-  if (rel !== -1 && !state.showPeering) return false;
+  // -1 transit, 0 peering, 1 intra-AS backbone (router maps; follows transit)
+  if (rel !== 0 && !state.showTransit) return false;
+  if (rel === 0 && !state.showPeering) return false;
   return visibleNode(G.edges[2 * k]) && visibleNode(G.edges[2 * k + 1]);
 }
+
+// Links are filtered on the GPU by (sampling rank, shown by the toggles, core):
+// filtered vertices are culled in the vertex shader, so links switched off
+// cost nothing to rasterise, unlike drawing them with zero alpha.
+const edgeFilter = new DataFilterExtension({ filterSize: 3 });
 
 const TRANSITION = { duration: 1400, easing: (t) => t * t * (3 - 2 * t) };
 
@@ -616,7 +680,13 @@ function networkLayers(globeView) {
     target[3] = edgeVisible(index) && !(hidden && hidden[index]) ? edgeColor[o + 3] * lf[index] * (hidden ? 0.5 : 1) : 0;
     return target;
   };
-  const edgeData = { length: G.e };
+  const edgeData = memo('edges', () => ({ length: G.e }));
+  const edgeFilterValue = (_, { index, target }) => {
+    target[0] = G.edge_rank ? G.edge_rank[index] : 0;
+    target[1] = edgeVisible(index) && !(hidden && hidden[index]) ? 1 : 0; // fiber members too
+    target[2] = G.edgeCore[index];
+    return target;
+  };
   const src = (_, { index, target }) => endPos(index, 0, target);
   const dst = (_, { index, target }) => endPos(index, 1, target);
   const layers = [];
@@ -632,14 +702,15 @@ function networkLayers(globeView) {
           _pathType: 'open',
           getColor: getEdgeColor,
           opacity,
-          extensions: G.edge_rank ? [new DataFilterExtension({ filterSize: 1 })] : [],
-          getFilterValue: (_, { index }) => (G.edge_rank ? G.edge_rank[index] : 0),
-          filterRange: [0, sampleK()],
+          visible: opacity > 0,
+          extensions: [edgeFilter],
+          getFilterValue: edgeFilterValue,
+          filterRange: [[0, sampleK()], [1, 1], coreRange()],
           getWidth: 1,
           widthUnits: 'pixels',
           billboard: true,
           parameters: blendParams(true),
-          updateTriggers: { getColor: colourTrig },
+          updateTriggers: { getColor: colourTrig, getFilterValue: colourTrig },
         }),
       );
     } else {
@@ -651,13 +722,14 @@ function networkLayers(globeView) {
           getTargetPosition: dst,
           getColor: getEdgeColor,
           opacity,
-          extensions: G.edge_rank ? [new DataFilterExtension({ filterSize: 1 })] : [],
-          getFilterValue: (_, { index }) => (G.edge_rank ? G.edge_rank[index] : 0),
-          filterRange: [0, sampleK()],
+          visible: opacity > 0,
+          extensions: [edgeFilter],
+          getFilterValue: edgeFilterValue,
+          filterRange: [[0, sampleK()], [1, 1], coreRange()],
           getWidth: 1,
           widthUnits: 'pixels',
           parameters: blendParams(false),
-          updateTriggers: { getSourcePosition: trig, getTargetPosition: trig, getColor: colourTrig },
+          updateTriggers: { getSourcePosition: trig, getTargetPosition: trig, getColor: colourTrig, getFilterValue: colourTrig },
           transitions: { getSourcePosition: TRANSITION, getTargetPosition: TRANSITION },
         }),
       );
@@ -665,7 +737,7 @@ function networkLayers(globeView) {
   }
 
   if (usePops() && showVectors && G.pop_routes) {
-    const routeData = { length: G.pop_routes.length / 2 };
+    const routeData = memo('routes', () => ({ length: G.pop_routes.length / 2 }));
     const rsrc = (_, { index, target }) => popPos(G.pop_routes[2 * index], target);
     const rdst = (_, { index, target }) => popPos(G.pop_routes[2 * index + 1], target);
     const rlf = routeLengthFactor();
@@ -716,11 +788,12 @@ function networkLayers(globeView) {
 
   // Selection: the selected AS's links, bright.
   if (state.selected !== null) {
-    const nb = G.neighbours(state.selected);
+    const nb = memo(`nb|${state.selected}`, () => G.neighbours(state.selected));
     const sideOf = (d) => (G.edges[2 * d.edge] === state.selected ? 0 : 1);
     const selColor = (d) => (G.edge_rel[d.edge] === -1 ? [255, 255, 255, 200] : [140, 220, 255, 150]);
     if (globeView) {
-      const data = buildArcs(nb.length, (k, a, b) => (endPos(nb[k].edge, sideOf(nb[k]), a), endPos(nb[k].edge, 1 - sideOf(nb[k]), b)), 0.05);
+      const data = memo(`sel-arcs|${state.selected}|${trig}`, () =>
+        buildArcs(nb.length, (k, a, b) => (endPos(nb[k].edge, sideOf(nb[k]), a), endPos(nb[k].edge, 1 - sideOf(nb[k]), b)), 0.05));
       layers.push(
         new PathLayer({
           id: 'sel-edges',
@@ -757,7 +830,7 @@ function networkLayers(globeView) {
   layers.push(
     new ScatterplotLayer({
       id: 'nodes',
-      data: { length: G.n },
+      data: memo('nodes', () => ({ length: G.n })),
       getPosition: (_, { index, target }) => pos(index, target),
       getRadius: (_, { index }) => (visibleNode(index) && !(pops && hasPops(index)) ? 0.6 + Math.log2(G.degree[index] + 1) * 0.55 : 0),
       getFillColor: (_, { index, target }) => {
@@ -772,6 +845,9 @@ function networkLayers(globeView) {
       billboard: true,
       radiusMinPixels: 0,
       radiusScale: sizeK,
+      extensions: [nodeFilter],
+      getFilterValue: (_, { index }) => G.coreRank[index],
+      filterRange: coreRange(),
       opacity: nodeOpacity,
       pickable: true,
       autoHighlight: true,
@@ -786,7 +862,7 @@ function networkLayers(globeView) {
     layers.push(
       new ScatterplotLayer({
         id: 'pops',
-        data: { length: G.pop_node.length },
+        data: memo('pops', () => ({ length: G.pop_node.length })),
         getPosition: (_, { index, target }) => popPos(index, target),
         getRadius: (_, { index }) => {
           const i = G.pop_node[index];
@@ -804,6 +880,9 @@ function networkLayers(globeView) {
         radiusUnits: 'pixels',
         billboard: true,
         radiusScale: sizeK,
+        extensions: [nodeFilter],
+        getFilterValue: (_, { index }) => G.coreRank[G.pop_node[index]],
+        filterRange: coreRange(),
         opacity: Math.min(1, nodeOpacity * 1.5),
         pickable: true,
         autoHighlight: true,
@@ -818,7 +897,7 @@ function networkLayers(globeView) {
     layers.push(
       new ScatterplotLayer({
         id: 'sel-node',
-        data: [state.selected],
+        data: memo(`sel|${state.selected}`, () => [state.selected]),
         getPosition: (i, { target }) => pos(i, target),
         getRadius: 9,
         radiusUnits: 'pixels',
@@ -877,7 +956,7 @@ function render() {
     if (map.getLayer('base')) map.setPaintProperty('base', 'raster-opacity', basemapOpacity());
   }
   syncControls();
-  writeHash();
+  writeHashSoon(); // browsers throttle history.replaceState; never per frame
 }
 
 // --- interaction ---------------------------------------------------------
@@ -901,7 +980,9 @@ function onHover(info) {
   } else if (info.layer?.id === 'fibers' && info.index >= 0) {
     const f = computeFibers().fibers[info.index];
     tip.hidden = false;
-    tip.textContent = `fiber: ${fmt(f.count)} links (${fmt(f.transit)} transit, ${fmt(f.peering)} peering)`;
+    tip.textContent = G.edge_weight
+      ? `fiber: ${fmt(f.count)} router links (${fmt(f.transit)} transit/backbone, ${fmt(f.peering)} peering)`
+      : `fiber: ${fmt(f.count)} links (${fmt(f.transit)} transit, ${fmt(f.peering)} peering)`;
     tip.style.left = `${info.x + 12}px`;
     tip.style.top = `${info.y + 12}px`;
   } else {
@@ -944,34 +1025,44 @@ function flyTo(i) {
 const fmt = (x) => x.toLocaleString('en-US');
 
 function showInfo(i, r) {
+  const routers = G.meta.kind === 'routers';
+  const wOf = (d) => (G.edge_weight ? G.edge_weight[d.edge] : 0);
   const nb = G.neighbours(i)
-    .map((d) => ({ ...d, deg: G.degree[d.node] }))
-    .sort((a, b) => b.deg - a.deg);
+    .map((d) => ({ ...d, deg: G.degree[d.node], w: wOf(d) }))
+    .sort((a, b) => b.w - a.w || b.deg - a.deg);
   const relOf = (d) => {
-    if (G.edge_rel[d.edge] !== -1) return 'peer';
+    const rel = G.edge_rel[d.edge];
+    if (rel === 1) return 'backbone';
+    if (rel !== -1) return 'peer';
     return G.edges[2 * d.edge] === i ? 'customer' : 'provider';
   };
-  const slash24 = r.addrs / 256;
-  const sites = r.sites
+  const row = (k, v) => (v === undefined || v === null || v === '' ? '' : `<dt>${k}</dt><dd>${v}</dd>`);
+  const num = (x) => (typeof x === 'number' ? fmt(x) : undefined);
+  const sites = (r.sites || [])
     .map(([lat, lon, share, city]) => `<li>${esc(city || '?')} <span class="muted">${(share * 100).toFixed(0)}%</span></li>`)
     .join('');
-  const pfx = r.prefixes.map((p) => `<li>${p}</li>`).join('');
+  const pfx = (r.prefixes || []).map((p) => `<li>${p}</li>`).join('');
   const nbrs = nb
     .slice(0, 40)
-    .map((d) => `<li data-i="${d.node}"><span class="asn">AS${G.asn[d.node]}</span> ${esc(G.names[d.node])} <span class="muted">(${relOf(d)})</span></li>`)
+    .map((d) => `<li data-i="${d.node}"><span class="asn">AS${G.asn[d.node]}</span> ${esc(G.names[d.node])} <span class="muted">(${relOf(d)}${d.w ? `, ${fmt(d.w)} router links` : ''})</span></li>`)
     .join('');
+  const slash24 = r.addrs / 256;
+  const place = [r.city, r.region, r.country].filter(Boolean).map(esc).join(', ');
+  const rows = [
+    routers ? row('Location', place) : row('Country', `${esc(r.country || '—')} · ${esc(G.meta.regions[G.region[i]].name)}`),
+    row('Routers', num(r.routers)),
+    row('Router links', num(r.router_links)),
+    row('Rank', r.rank ? `#${fmt(r.rank)} by customer cone` : undefined),
+    row('Links', `${fmt(r.degree)} — ${fmt(r.providers)} providers, ${fmt(r.customers)} customers, ${fmt(r.peers)} ${routers ? 'peers/backbone' : 'peers'}`),
+    row('Cone', r.cone !== undefined ? `${fmt(r.cone)} ${routers ? 'PoPs' : 'ASes'}` : undefined),
+    row('k-core', r.coreness),
+    r.addrs !== undefined ? row('IPv4', `${fmt(r.addrs)} addrs (${slash24 >= 1 ? fmt(Math.round(slash24)) + ' /24s' : '< /24'}), ${fmt(r.nprefix)} ranges`) : '',
+    r.sites ? row('Geo', r.sites.length ? `${(r.concentration * 100).toFixed(0)}% near main site · ${r.pinned ? 'pinned' : 'floating'} in hybrid` : 'no geolocation') : '',
+  ].join('');
   $('infoBody').innerHTML = `
     <h2><span class="asn">AS${r.asn}</span> ${esc(r.name)}</h2>
     ${r.as_name && r.as_name !== r.name ? `<div class="muted">${esc(r.as_name)}</div>` : ''}
-    <dl>
-      <dt>Country</dt><dd>${esc(r.country || '—')} · ${esc(G.meta.regions[G.region[i]].name)}</dd>
-      <dt>Rank</dt><dd>#${fmt(r.rank)} by customer cone</dd>
-      <dt>Links</dt><dd>${fmt(r.degree)} — ${fmt(r.providers)} providers, ${fmt(r.customers)} customers, ${fmt(r.peers)} peers</dd>
-      <dt>Cone</dt><dd>${fmt(r.cone)} ASes</dd>
-      <dt>k-core</dt><dd>${r.coreness}</dd>
-      <dt>IPv4</dt><dd>${fmt(r.addrs)} addrs (${slash24 >= 1 ? fmt(Math.round(slash24)) + ' /24s' : '< /24'}), ${fmt(r.nprefix)} ranges</dd>
-      <dt>Geo</dt><dd>${r.sites.length ? `${(r.concentration * 100).toFixed(0)}% near main site · ${r.pinned ? 'pinned' : 'floating'} in hybrid` : 'no geolocation'}</dd>
-    </dl>
+    <dl>${rows}</dl>
     ${sites ? `<h3>Sites</h3><ul>${sites}</ul>` : ''}
     ${pfx ? `<h3>Prefixes${r.nprefix > r.prefixes.length ? ` (largest ${r.prefixes.length})` : ''}</h3><ul class="prefixes">${pfx}</ul>` : ''}
     <h3>Neighbours${nb.length > 40 ? ` (top 40 of ${fmt(nb.length)})` : ''}</h3>
@@ -1053,6 +1144,7 @@ function wireSearch() {
 
 function syncControls() {
   $('samplingLabel').textContent = G ? samplingLabel() : '';
+  $('coreLabel').textContent = G ? coreLabel() : '';
   const fib = state.fibers && G && fiberCache.value;
   $('fiberLabel').textContent = fib
     ? `~${Math.round(fiberCellSize() * 40075)} km cells · ${fmt(fib.fibers.length)} fibers carrying ${fmt(fib.bundled)} links`
@@ -1141,6 +1233,8 @@ function wireControls() {
   slider('altitude', 'altitude');
   $('sampling').value = Math.round(state.sampling * 100);
   slider('sampling', 'sampling');
+  $('core').value = Math.round(state.core * 100);
+  slider('core', 'core');
   $('fiberCell').value = Math.round(state.fiberCell * 100);
   slider('fiberCell', 'fiberCell');
   slider('fiberWidth', 'fiberWidth');
@@ -1187,7 +1281,9 @@ async function load(id) {
   routeLF = null;
   fiberCache = { key: null, value: null };
   arcCache.clear();
+  memoCache.clear();
   for (const k of Object.keys(lengthFactor)) delete lengthFactor[k];
+  computeCoreRank();
   lowerNames = G.names.map((s) => s.toLowerCase());
   buildColours();
   tilesMeta = {};
@@ -1213,7 +1309,12 @@ async function load(id) {
     .map((r) => `<li><i style="color: rgb(${r.rgb.join(',')}); background: rgb(${r.rgb.join(',')})"></i>${esc(r.name.split(' /')[0])}</li>`)
     .join('');
   const c = m.counts;
-  $('stats').innerHTML = `${fmt(c.nodes)} ASes · ${fmt(c.edges)} links (${fmt(c.p2c)} transit, ${fmt(c.p2p)} peering) · ${fmt(c.geolocated)} geolocated, ${fmt(c.pinned)} pinned${c.backbone ? ` · ${fmt(c.backbone)} backbone` : ''}<br>${m.attribution.join('<br>')}`;
+  const isRouters = m.kind === 'routers';
+  const intra = isRouters ? c.edges - c.p2c - c.p2p : 0;
+  $('stats').innerHTML = isRouters
+    ? `${fmt(c.nodes)} PoPs (AS × city) · ${fmt(c.edges)} PoP links (${fmt(intra)} intra-AS backbone, ${fmt(c.p2c)} transit, ${fmt(c.p2p)} peering)<br>${m.attribution.join('<br>')}`
+    : `${fmt(c.nodes)} ASes · ${fmt(c.edges)} links (${fmt(c.p2c)} transit, ${fmt(c.p2p)} peering) · ${fmt(c.geolocated)} geolocated, ${fmt(c.pinned)} pinned${c.backbone ? ` · ${fmt(c.backbone)} backbone` : ''}<br>${m.attribution.join('<br>')}`;
+  $('transitLabel').textContent = isRouters ? 'transit + intra-AS backbone links' : 'transit links (provider→customer)';
   map.getContainer().querySelector('.maplibregl-ctrl-attrib-inner');
   updateRaster();
   render();
@@ -1232,7 +1333,7 @@ async function boot() {
     return;
   }
   $('dataset').innerHTML = sets
-    .map((s) => `<option value="${s.id}">${esc(s.name)}${s.synthetic ? ' (synthetic)' : ''} — ${fmt(s.counts.nodes)} ASes</option>`)
+    .map((s) => `<option value="${s.id}">${esc(s.name)}${s.synthetic ? ' (synthetic)' : ''} — ${fmt(s.counts.nodes)} ${s.kind === 'routers' ? 'PoPs' : 'ASes'}</option>`)
     .join('');
   if (!state.dataset || !sets.some((s) => s.id === state.dataset)) state.dataset = sets[0].id;
   $('dataset').value = state.dataset;
@@ -1245,6 +1346,13 @@ window.netmap = {
   state,
   render: () => render(),
   layers: () => (state.view === 'globe' ? globe?.props.layers : overlay._props?.layers || []).map((l) => l.id),
+  deck: () => (state.view === 'globe' ? globe : overlay._deck),
+  // what one zoom event costs on the main thread (perf probes)
+  zoomStep: (dz) => {
+    if (state.view === 'globe') globeZoom += dz;
+    else map.jumpTo({ zoom: map.getZoom() + dz });
+    render();
+  },
 };
 
 boot();

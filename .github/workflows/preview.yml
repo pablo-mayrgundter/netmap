@@ -34,14 +34,22 @@ jobs:
       - uses: actions/cache@v4
         if: github.event.action != 'closed'
         with:
-          path: data/raw
+          path: |
+            data/raw
+            !data/raw/itdk-*
           key: raw-${{ github.run_id }}
           restore-keys: raw-
-      - name: Build map bundle
+      - uses: actions/cache@v4
+        if: github.event.action != 'closed'
+        with:
+          path: data/raw/itdk-*
+          key: itdk-v1
+      - name: Build map bundles
         if: github.event.action != 'closed'
         run: |
-          pip install -e pipeline
+          pip install -e "pipeline[itdk]"
           python -m netmap build --topology caida --name internet
+          python -m netmap build-itdk --name routers
           python -m netmap tiles web/public/data/internet --format webp --maxzoom 3
       - name: Build viewer
         if: github.event.action != 'closed'
