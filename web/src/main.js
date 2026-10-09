@@ -9,6 +9,15 @@ import countries110 from 'world-atlas/countries-110m.json';
 
 import { listDatasets, loadBundle } from './data.js';
 
+// Material Icons (Apache-2.0), the same glyphs as MUI's icons, inlined as SVG.
+import hubIcon from '@material-design-icons/svg/filled/hub.svg?raw';
+import listIcon from '@material-design-icons/svg/filled/format_list_bulleted.svg?raw';
+import expandLessIcon from '@material-design-icons/svg/filled/expand_less.svg?raw';
+import searchIcon from '@material-design-icons/svg/filled/search.svg?raw';
+
+const ICONS = { hub: hubIcon, format_list_bulleted: listIcon, expand_less: expandLessIcon, search: searchIcon };
+for (const el of document.querySelectorAll('[data-icon]')) el.innerHTML = ICONS[el.dataset.icon];
+
 // Where map bundles live. PR previews point this at the production data (../../data).
 const DATA_BASE = new URL(import.meta.env.VITE_DATA_BASE || './data', document.baseURI).href.replace(/\/$/, '');
 const params = new URLSearchParams(location.search);
@@ -73,6 +82,8 @@ const PARAMS = [
   ['fiberCell', 'cell', 'num', 1], // 0..1 -> ~5..650 km
   ['fiberWidth', 'fw', 'num', 0.1],
   ['glow', 'glow', 'bool', true],
+  ['panelOpen', 'panel', 'bool', true], // controls card shown (else its icon)
+  ['detailsOpen', 'details', 'bool', true], // details card shown when something is selected
 ];
 
 function readParam([, key, type, def]) {
@@ -111,6 +122,14 @@ const map = new maplibregl.Map({
   renderWorldCopies: false,
   attributionControl: { compact: true },
   maxZoom: 16,
+  // Zoom out past "the world fills the viewport" (MapLibre's default without
+  // world copies), so the whole map fits between the cards; just keep the
+  // centre on the world.
+  minZoom: -1,
+  transformConstrain: (lngLat, zoom) => ({
+    center: new maplibregl.LngLat(Math.max(-180, Math.min(180, lngLat.lng)), Math.max(-85, Math.min(85, lngLat.lat))),
+    zoom: Math.max(-1, Math.min(16, zoom)),
+  }),
 });
 map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
 
@@ -998,9 +1017,10 @@ function onClick(info) {
 
 async function select(i, fly = true) {
   state.selected = i;
+  infoReady = false;
   render();
   if (i === null) {
-    $('info').hidden = true;
+    layoutCards();
     return;
   }
   if (fly) flyTo(i);
@@ -1074,10 +1094,36 @@ function showInfo(i, r) {
           <a href="https://asrank.caida.org/asns/${r.asn}" target="_blank" rel="noopener">CAIDA ASRank</a> ·
           <a href="https://www.peeringdb.com/asn/${r.asn}" target="_blank" rel="noopener">PeeringDB</a></li>
     </ul>`;
-  $('info').hidden = false;
+  infoReady = true;
+  layoutCards();
   for (const li of $('infoBody').querySelectorAll('.nbrs li')) {
     li.addEventListener('click', () => select(Number(li.dataset.i)));
   }
+}
+
+// --- cards ---------------------------------------------------------------
+// The controls and details cards minimise to icons. The map is padded by the
+// cards that are open, so its centre (and zoom-to-fit) is the space between.
+
+let infoReady = false; // details for the current selection are loaded
+function layoutCards() {
+  $('panel').hidden = !state.panelOpen;
+  $('panelFab').hidden = state.panelOpen;
+  const sel = state.selected !== null && infoReady;
+  $('info').hidden = !(sel && state.detailsOpen);
+  $('infoFab').hidden = !(sel && !state.detailsOpen);
+  const narrow = window.innerWidth <= 720;
+  const left = !narrow && state.panelOpen ? $('panel').getBoundingClientRect().right : 0;
+  const right = !narrow && !$('info').hidden ? window.innerWidth - $('info').getBoundingClientRect().left : 0;
+  const pad = map.getPadding();
+  if (pad.left !== left || pad.right !== right) map.easeTo({ padding: { top: 0, bottom: 0, left, right }, duration: 300 });
+}
+
+function setCard(key, open) {
+  state[key] = open;
+  layoutCards();
+  writeHashSoon();
+  (open ? $(key === 'panelOpen' ? 'panelMin' : 'infoMin') : $(key === 'panelOpen' ? 'panelFab' : 'infoFab')).focus();
 }
 
 function esc(s) {
@@ -1104,11 +1150,32 @@ function search(q) {
   return out;
 }
 
+// The search toolbar: an icon that expands to the right into the field.
+function openSearch(open = true) {
+  const bar = $('searchbar');
+  const input = $('search');
+  bar.classList.toggle('open', open);
+  $('searchBtn').setAttribute('aria-expanded', String(open));
+  input.tabIndex = open ? 0 : -1;
+  if (open) input.focus();
+  else {
+    input.value = '';
+    $('results').innerHTML = '';
+    input.blur();
+  }
+}
+
 function wireSearch() {
   const input = $('search');
   const list = $('results');
   let items = [];
   let active = 0;
+  $('searchBtn').addEventListener('click', () => openSearch(!$('searchbar').classList.contains('open')));
+  // close when focus leaves an empty field (results keep focus on mousedown)
+  list.addEventListener('mousedown', (e) => e.preventDefault());
+  input.addEventListener('blur', () => {
+    if (!input.value.trim()) openSearch(false);
+  });
   const draw = () => {
     list.innerHTML = items
       .map((i, k) => `<li data-i="${i}" class="${k === active ? 'active' : ''}"><span class="asn">AS${G.asn[i]}</span>${esc(G.names[i])}</li>`)
@@ -1120,6 +1187,11 @@ function wireSearch() {
     draw();
   });
   input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      openSearch(false);
+      e.stopPropagation();
+      return;
+    }
     if (e.key === 'ArrowDown') active = Math.min(active + 1, items.length - 1);
     else if (e.key === 'ArrowUp') active = Math.max(active - 1, 0);
     else if (e.key === 'Enter' && items[active] !== undefined) {
@@ -1175,7 +1247,10 @@ function writeHash() {
     h.set('lat', c.lat.toFixed(3));
     h.set('z', map.getZoom().toFixed(2));
   }
-  if (state.selected !== null && G) h.set('as', G.asn[state.selected]);
+  if (state.selected !== null && G) {
+    h.set('as', G.asn[state.selected]);
+    if (G.meta.kind === 'routers') h.set('pop', state.selected); // which of the AS's PoPs
+  }
   history.replaceState(null, '', `#${h}`);
 }
 
@@ -1246,11 +1321,16 @@ function wireControls() {
       render();
     });
   }
-  $('close').addEventListener('click', () => select(null));
+  $('panelMin').addEventListener('click', () => setCard('panelOpen', false));
+  $('panelFab').addEventListener('click', () => setCard('panelOpen', true));
+  $('infoMin').addEventListener('click', () => setCard('detailsOpen', false));
+  $('infoFab').addEventListener('click', () => setCard('detailsOpen', true));
+  window.addEventListener('resize', () => layoutCards());
   $('dataset').addEventListener('change', (e) => {
     state.dataset = e.target.value;
     state.selected = null;
-    $('info').hidden = true;
+    infoReady = false;
+    layoutCards();
     load(state.dataset);
   });
   map.on('moveend', writeHash);
@@ -1267,7 +1347,7 @@ function wireControls() {
     } else if (e.key === 'Escape') select(null);
     else if (e.key === '/') {
       e.preventDefault();
-      $('search').focus();
+      openSearch(true);
     }
   });
 }
@@ -1320,13 +1400,16 @@ async function load(id) {
   render();
 
   const want = hash.get('as');
-  if (want && G.byAsn.has(Number(want))) select(G.byAsn.get(Number(want)), false);
+  const pop = Number(hash.get('pop'));
+  if (want && Number.isInteger(pop) && hash.has('pop') && G.asn[pop] === Number(want)) select(pop, false);
+  else if (want && G.byAsn.has(Number(want))) select(G.byAsn.get(Number(want)), false);
 }
 
 async function boot() {
   wireControls();
   applyControls();
   wireSearch();
+  layoutCards();
   const sets = await listDatasets(DATA_BASE);
   if (!sets.length) {
     $('stats').innerHTML = 'No datasets found. Run <code>python -m netmap build</code> first (see README).';
