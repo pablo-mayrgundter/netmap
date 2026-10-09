@@ -1077,7 +1077,20 @@ function render() {
     if (map.getLayer('base')) map.setPaintProperty('base', 'raster-opacity', basemapOpacity());
   }
   syncControls();
+  updateTitle();
   writeHashSoon(); // browsers throttle history.replaceState; never per frame
+}
+
+// Tab title: what's targeted (the explored node, else the route or search),
+// or the layout when nothing is.
+function updateTitle() {
+  const name = (i) => G.names[i] || `AS${G.asn[i]}`;
+  const wps = G ? state.waypoints.filter((w) => w >= 0) : [];
+  let what = state.mode;
+  if (G && state.explore !== null) what = name(state.explore);
+  else if (wps.length === 1) what = name(wps[0]);
+  else if (wps.length > 1) what = [name(wps[0]), ...(wps.length > 2 ? ['…'] : []), name(wps[wps.length - 1])].join(' → ');
+  document.title = `netmap - ${what}`;
 }
 
 // --- interaction ---------------------------------------------------------
