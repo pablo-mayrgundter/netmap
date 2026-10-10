@@ -1,7 +1,7 @@
 {
  "format": 1,
  "name": "routers",
- "generated": "2026-10-09T22:40:27+00:00",
+ "generated": "2026-10-10T01:54:25+00:00",
  "synthetic": false,
  "kind": "routers",
  "source": "CAIDA ITDK 2025-08 (midar-iff-snmp), routers aggregated to (AS, city) PoPs",
@@ -12,7 +12,7 @@
   "p2c": 115587,
   "p2p": 260803,
   "geolocated": 148673,
-  "pinned": 148673,
+  "pinned": 2099,
   "backbone": 148321,
   "pops": 0,
   "routes": 0
@@ -21,17 +21,6 @@
   "cyber",
   "geo",
   "hybrid"
- ],
- "morph": [
-  "pos_cyber",
-  "pos_m1",
-  "pos_m2",
-  "pos_m3",
-  "pos_hybrid",
-  "pos_m5",
-  "pos_m6",
-  "pos_m7",
-  "pos_geo"
  ],
  "regions": [
   {
@@ -199,63 +188,9 @@
     680213
    ]
   },
-  "pos_m1": {
-   "dtype": "float32",
-   "offset": 13726648,
-   "length": 297346,
-   "shape": [
-    148673,
-    2
-   ]
-  },
-  "pos_m2": {
-   "dtype": "float32",
-   "offset": 14916032,
-   "length": 297346,
-   "shape": [
-    148673,
-    2
-   ]
-  },
-  "pos_m3": {
-   "dtype": "float32",
-   "offset": 16105416,
-   "length": 297346,
-   "shape": [
-    148673,
-    2
-   ]
-  },
-  "pos_m5": {
-   "dtype": "float32",
-   "offset": 17294800,
-   "length": 297346,
-   "shape": [
-    148673,
-    2
-   ]
-  },
-  "pos_m6": {
-   "dtype": "float32",
-   "offset": 18484184,
-   "length": 297346,
-   "shape": [
-    148673,
-    2
-   ]
-  },
-  "pos_m7": {
-   "dtype": "float32",
-   "offset": 19673568,
-   "length": 297346,
-   "shape": [
-    148673,
-    2
-   ]
-  },
   "edge_weight": {
    "dtype": "uint32",
-   "offset": 20862952,
+   "offset": 13726648,
    "length": 680213,
    "shape": [
     680213

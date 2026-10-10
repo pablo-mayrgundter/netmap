@@ -1,7 +1,7 @@
 {
  "format": 1,
  "name": "internet",
- "generated": "2026-10-09T22:38:59+00:00",
+ "generated": "2026-10-10T01:52:38+00:00",
  "synthetic": false,
  "kind": "as",
  "source": "CAIDA AS relationships (20261001.as-rel2.txt.bz2)",
@@ -12,7 +12,7 @@
   "p2c": 168270,
   "p2p": 489174,
   "geolocated": 78015,
-  "pinned": 70612,
+  "pinned": 854,
   "backbone": 107113,
   "pops": 32213,
   "routes": 25010
@@ -21,17 +21,6 @@
   "cyber",
   "geo",
   "hybrid"
- ],
- "morph": [
-  "pos_cyber",
-  "pos_m1",
-  "pos_m2",
-  "pos_m3",
-  "pos_hybrid",
-  "pos_m5",
-  "pos_m6",
-  "pos_m7",
-  "pos_geo"
  ],
  "regions": [
   {
@@ -199,63 +188,9 @@
     657444
    ]
   },
-  "pos_m1": {
-   "dtype": "float32",
-   "offset": 10632472,
-   "length": 161932,
-   "shape": [
-    80966,
-    2
-   ]
-  },
-  "pos_m2": {
-   "dtype": "float32",
-   "offset": 11280200,
-   "length": 161932,
-   "shape": [
-    80966,
-    2
-   ]
-  },
-  "pos_m3": {
-   "dtype": "float32",
-   "offset": 11927928,
-   "length": 161932,
-   "shape": [
-    80966,
-    2
-   ]
-  },
-  "pos_m5": {
-   "dtype": "float32",
-   "offset": 12575656,
-   "length": 161932,
-   "shape": [
-    80966,
-    2
-   ]
-  },
-  "pos_m6": {
-   "dtype": "float32",
-   "offset": 13223384,
-   "length": 161932,
-   "shape": [
-    80966,
-    2
-   ]
-  },
-  "pos_m7": {
-   "dtype": "float32",
-   "offset": 13871112,
-   "length": 161932,
-   "shape": [
-    80966,
-    2
-   ]
-  },
   "pop_pos": {
    "dtype": "float32",
-   "offset": 14518840,
+   "offset": 10632472,
    "length": 64426,
    "shape": [
     32213,
@@ -264,7 +199,7 @@
   },
   "pop_node": {
    "dtype": "uint32",
-   "offset": 14776544,
+   "offset": 10890176,
    "length": 32213,
    "shape": [
     32213
@@ -272,7 +207,7 @@
   },
   "pop_offset": {
    "dtype": "uint32",
-   "offset": 14905400,
+   "offset": 11019032,
    "length": 80967,
    "shape": [
     80967
@@ -280,7 +215,7 @@
   },
   "edge_pop": {
    "dtype": "int32",
-   "offset": 15229272,
+   "offset": 11342904,
    "length": 1314888,
    "shape": [
     657444,
@@ -289,7 +224,7 @@
   },
   "pop_routes": {
    "dtype": "uint32",
-   "offset": 20488824,
+   "offset": 16602456,
    "length": 50020,
    "shape": [
     25010,

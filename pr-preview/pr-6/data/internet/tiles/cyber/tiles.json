@@ -7,6 +7,6 @@
  "format": "webp",
  "minzoom": 0,
  "maxzoom": 3,
- "count": 67,
+ "count": 71,
  "attribution": "Prefix-to-AS: RouteViews / NRO via ip-location-db (CC BY 4.0); IP geolocation: <a href=\"https://db-ip.com\">DB-IP</a> lite (CC BY 4.0); The CAIDA UCSD AS Relationships Dataset - 20261001, <a href=\"https://catalog.caida.org/dataset/as_relationships_serial_2\">catalog</a>; The CAIDA UCSD AS to Organization Mapping Dataset, <a href=\"https://catalog.caida.org/dataset/as_organizations\">catalog</a>"
 }
