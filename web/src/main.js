@@ -343,8 +343,8 @@ function altitude(i) {
   return Math.pow(l, 1.5) * ALT_MAX_M * state.altitude * 2;
 }
 
-// The cyber -> geo slider walks the bundle's morph stops (pipeline
-// layout.morph): the section for the current one.
+// The cyber -> geo slider walks the layout stops (data.js: cyber, blends,
+// hybrid, blends, geo): the section for the current one.
 function layoutSec(m = state.morph) {
   const stops = G?.meta.morph || ['pos_cyber', 'pos_hybrid', 'pos_geo'];
   return stops[Math.round(m * (stops.length - 1))];
@@ -362,7 +362,12 @@ function pos(i, target, sec = layoutSec()) {
 // cities their address space lives in. Each link end may attach to a PoP
 // instead of the AS's single position, and each PoP'd AS has core routes
 // (a spanning tree) between its PoPs.
-const usePops = (sec = layoutSec()) => state.pops && sec !== 'pos_cyber' && !!G?.pop_pos;
+// PoPs and fibers are about places, so they apply on the geo half of the
+// slider: hybrid's own layout is LGL's around the pins, and splitting its
+// hubs into PoPs or bundling its links would hide the Opte families.
+const geoSide = (sec = layoutSec()) => !!G && G.meta.morph.indexOf(sec) > (G.meta.morph.length - 1) / 2;
+const usePops = (sec = layoutSec()) => state.pops && geoSide(sec) && !!G?.pop_pos;
+const useFibers = () => state.fibers && geoSide();
 const hasPops = (i) => !!G.pop_offset && G.pop_offset[i + 1] > G.pop_offset[i];
 
 function popPos(p, target) {
@@ -736,9 +741,9 @@ function networkLayers(globeView) {
   const trig = `${layoutSec()}|${state.view}|${state.altitude}|${usePops()}`;
   const opacity = edgeOpacity(globeView);
   const lf = edgeLengthFactor(layoutSec());
-  const fib = state.fibers && showVectorsFor(globeView) ? computeFibers() : null;
+  const fib = useFibers() && showVectorsFor(globeView) ? computeFibers() : null;
   const hidden = fib ? fib.hidden : null;
-  const colourTrig = `${state.mode}|${state.showTransit}|${state.showPeering}|${state.backboneOnly}|${usePops()}|${state.fibers ? fiberCache.key ?? 'f' : ''}`;
+  const colourTrig = `${state.mode}|${state.showTransit}|${state.showPeering}|${state.backboneOnly}|${usePops()}|${useFibers() ? fiberCache.key ?? 'f' : ''}`;
   const getEdgeColor = (_, { index, target }) => {
     const o = index * 4;
     target[0] = edgeColor[o];
@@ -1753,7 +1758,7 @@ function wireSearch() {
 function syncControls() {
   $('samplingLabel').textContent = G ? samplingLabel() : '';
   $('coreLabel').textContent = G ? coreLabel() : '';
-  const fib = state.fibers && G && fiberCache.value;
+  const fib = useFibers() && fiberCache.value;
   $('fiberLabel').textContent = fib
     ? `~${Math.round(fiberCellSize() * 40075)} km cells · ${fmt(fib.fibers.length)} fibers carrying ${fmt(fib.bundled)} links`
     : '';
@@ -1764,6 +1769,7 @@ function syncControls() {
   $('morphLabel').textContent = `${state.mode}${state.mode === 'hybrid' ? ` · ${Math.round(state.morph * 100)}% geo` : ''}`;
   for (const b of $('view').children) b.classList.toggle('on', b.dataset.v === state.view);
   $('basemap').value = state.basemap;
+  $('pops').disabled = $('fibers').disabled = !geoSide(); // places: the geo half of the slider
   $('basemap').disabled = state.view === 'globe';
   $('renderer').disabled = state.view === 'globe';
   $('renderer').value = state.renderer;

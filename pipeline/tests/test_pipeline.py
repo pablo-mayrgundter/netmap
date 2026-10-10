@@ -437,10 +437,10 @@ def test_ip2asn_boundaries_and_file(tmp_path):
     assert np.array_equal(np.frombuffer(raw, "<u4", n, 12 + 4 * n), an)
 
 
-def test_morph_keeps_hub_and_spoke_families_near_their_cities():
-    """cyber -> geo: the ends are the cyber and geo layouts; halfway (the
-    hybrid), each hub's spokes still surround it, and the family sits near
-    the city its members are geolocated to."""
+def test_hybrid_grows_opte_families_around_pins():
+    """Hybrid pins the hubs to their cities and lets LGL place the rest: the
+    pins stay put and each hub's spokes come out as an Opte star around it,
+    nearer to it than to any other hub, a few hundred km across."""
     from netmap import native
 
     try:
@@ -449,25 +449,18 @@ def test_morph_keeps_hub_and_spoke_families_near_their_cities():
         pytest.skip("no C compiler")
     hubs, spokes = 8, 30
     n, el = hub_and_spoke_graph(hubs, spokes)
-    xy = native.lgl_opte(n, el[:, 0], el[:, 1], seed=3)
-    xy = (xy - xy.mean(0)) / np.abs(xy).max()
-    cyber = layout.merc_to_lonlat(0.5 + 0.4 * xy[:, 0], 0.5 + 0.4 * xy[:, 1])
     rng = np.random.default_rng(1)
-    city = np.stack([rng.uniform(-150, 150, hubs), rng.uniform(-50, 60, hubs)], 1)
+    glon = np.r_[rng.uniform(-150, 150, hubs), np.zeros(n - hubs)]
+    glat = np.r_[rng.uniform(-50, 60, hubs), np.zeros(n - hubs)]
+    pins = np.arange(n) < hubs
+    lon, lat = layout.hybrid(n, el[:, 0], el[:, 1], (glon, glat), pins, located=pins, km=100)
+    assert np.allclose(lon[:hubs], glon[:hubs], atol=1e-4) and np.allclose(lat[:hubs], glat[:hubs], atol=1e-4)
+    x, y = layout.lonlat_to_merc(lon, lat)
+    even, own = spoke_quality(np.stack([x, y], 1), n, el, hubs)
+    assert even > 0.6 and own > 0.95, (even, own)
     owner = np.full(n, -1)
     owner[el[el[:, 0] < hubs][:, 1]] = el[el[:, 0] < hubs][:, 0]
-    owner[:hubs] = np.arange(hubs)
-    glon = city[owner, 0] + rng.normal(0, 1.0, n)  # members scattered ~100 km around their city
-    glat = city[owner, 1] + rng.normal(0, 1.0, n)
-    pin = np.ones(n)
-    pin[:hubs] = 0  # hubs float, like big transit networks
-    stops = layout.morph(n, el[:, 0], el[:, 1], cyber, (glon, glat), pin, stops=5, km=150)
-    assert len(stops) == 5
-    assert np.allclose(stops[0][0], cyber[0]) and np.allclose(stops[-1][0][hubs:], glon[hubs:])
-    mlon, mlat = (np.asarray(v) for v in stops[2])
-    x, y = layout.lonlat_to_merc(mlon, mlat)
-    even, own = spoke_quality(np.stack([x, y], 1), n, el, hubs)
-    assert even > 0.6 and own > 0.9, (even, own)
-    # each family sits by its city
-    off = np.hypot(mlon[:hubs] - city[:, 0], mlat[:hubs] - city[:, 1])
-    assert np.median(off) < 6, off
+    leaf = np.arange(n) >= hubs
+    km = 111 * np.hypot((lon[leaf] - glon[owner[leaf]]) * np.cos(np.radians(glat[owner[leaf]])),
+                        lat[leaf] - glat[owner[leaf]])
+    assert 20 < np.median(km) < 500, np.median(km)

@@ -8,7 +8,7 @@ of them:
 |------------|---------------|
 | **cyber**  | Pure topology. Large Graph Layout (Adai et al. 2004, the Opte-project look), with the basemap faded out. |
 | **geo**    | Every geolocated AS at the site that holds most of its address space. ASes in the same metro fan out on a sunflower spiral, so they separate as you zoom in. |
-| **hybrid** | The cyber layout moved onto the map rather than rebuilt from geography. The **Layout** slider runs from cyber to geo, with hybrid halfway, through nine stops computed by `layout.morph`. Each stop is a least-squares deformation of the cyber layout: every link keeps its cyber offset, scaled down until a typical link is `--morph-km` long (250 km by default), while geolocated networks are pulled toward their location. The pull strengthens along the slider and links between hubs loosen first. So a hub and its spokes travel together and land next to their points of presence, keeping their Opte star shape, while the backbone stretches across geography. On the **3D globe**, altitude shows hierarchy: last-mile networks sit on the ground and the core hovers above the oceans. Long hops are drawn as great-circle arcs. |
+| **hybrid** | Its own layout: pin first, then LGL. Well-connected networks with a firm location (≥ `--hybrid-pin-degree` layout links, 10 by default, about 850 ASes) are pinned at their site. The Opte LGL kernel (`lgl_opte.c`, given the pins) then grows and relaxes everything else around them, at `--hybrid-km` (100 km) per LGL unit. So the free subtrees come out as Opte families, a hub's spokes all around it, next to the pins they hang from. The **Layout** slider runs cyber → hybrid → geo; the viewer blends neighbouring layouts for the stops in between, and nodes glide from stop to stop. Points of presence and fiber bundles are about places, so they apply only on the geo half. On the **3D globe**, altitude shows hierarchy: last-mile networks sit on the ground and the core hovers above the oceans. Long hops are drawn as great-circle arcs. |
 
 Switching modes animates every node and link between layouts. Click a node to
 see its prefixes, sites, customer cone, k-core and neighbours.
@@ -178,9 +178,10 @@ ranges and weights each overlap by address count. That gives each AS:
   site. Regional ISPs score about 1. Cogent, Google and Comcast score 0.15–0.4;
 * its country (weighted mode) and its top cities, shown in the info panel.
 
-An AS counts as pinned (concentrated) when its concentration is ≥ `--pin-threshold`
+An AS has a firm location (concentrated) when its concentration is ≥ `--pin-threshold`
 (0.6) and its customer cone is ≤ `--pin-max-cone` (400). Everything bigger or
-more spread out floats.
+more spread out floats, and gets points of presence in geo. Hybrid pins the
+concentrated ASes with at least `--hybrid-pin-degree` layout links.
 
 ## Outputs
 

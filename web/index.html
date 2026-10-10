@@ -78,8 +78,8 @@
         <label class="check"><input id="showTransit" type="checkbox" checked /> <span id="transitLabel">transit links (provider→customer)</span></label>
         <label class="check"><input id="showPeering" type="checkbox" checked /> peering links</label>
         <label class="check" title="Each AS's primary provider link plus the core mesh: about one link per AS, like the traceroute trees of the Opte maps"><input id="backboneOnly" type="checkbox" checked /> backbone only (Opte-style)</label>
-        <label class="check" title="Hybrid and geo: draw floating ASes (global transit, CDNs, national backbones) at their points of presence, with core routes between them"><input id="pops" type="checkbox" checked /> points of presence + core routes</label>
-        <label class="check" title="Merge links that join the same pair of places into one fiber, sized by log(number of links)"><input id="fibers" type="checkbox" checked /> fiber bundles</label>
+        <label class="check" title="Geo half of the layout slider: draw floating ASes (global transit, CDNs, national backbones) at their points of presence, with core routes between them"><input id="pops" type="checkbox" checked /> points of presence + core routes</label>
+        <label class="check" title="Geo half of the layout slider: merge links that join the same pair of places into one fiber, sized by log(number of links)"><input id="fibers" type="checkbox" checked /> fiber bundles</label>
         <label class="row" title="How close link ends must be to share a fiber: metro (left) to region (right)"><span>Bundle</span><input id="fiberCell" type="range" min="0" max="100" value="100" /></label>
         <label class="row"><span>Fiber width</span><input id="fiberWidth" type="range" min="0" max="100" value="10" /></label>
         <div class="hint" id="fiberLabel"></div>

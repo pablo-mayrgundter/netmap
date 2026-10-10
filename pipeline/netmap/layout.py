@@ -7,11 +7,10 @@ basemaps (the cyber layout simply ignores the basemap).
 * geo:    every geolocated AS at its dominant site; co-located ASes are fanned
           out on a sunflower spiral (largest in the middle) so they separate
           as you zoom in.
-* hybrid: ASes whose address space is concentrated in one metro are pinned at
-          their site; everything else (global transit, CDNs, national
-          backbones, ASes without geo) is placed by the graph: a harmonic
-          (Tutte) embedding against the pinned nodes, then a short
-          Fruchterman-Reingold relaxation with pinned nodes held fixed.
+* hybrid: well-connected networks with a firm location are pinned at their
+          site, then Opte LGL lays out everything else around them, so the
+          free subtrees keep the cyber look (hub and spoke) next to their
+          pins. The viewer's cyber -> geo slider blends cyber, hybrid, geo.
 """
 
 from __future__ import annotations
@@ -23,8 +22,6 @@ import time
 
 import igraph as ig
 import numpy as np
-import scipy.sparse as sp
-import scipy.sparse.linalg as spla
 
 from . import native
 
@@ -191,64 +188,38 @@ def geo(lat, lon, has_geo, weight):
     return sunflower(lon, lat, weight, has_geo)
 
 
-# --- morph: cyber -> geo ----------------------------------------------------
+# --- hybrid: pins, then LGL -------------------------------------------------
 
-def morph(n: int, src, dst, cyber_ll, geo_ll, pin_w, stops: int = 9, km: float = 250.0,
-          lam_mid: float = 0.1) -> list[tuple[np.ndarray, np.ndarray]]:
-    """Layouts from cyber (stop 0) to geo (the last stop), deforming the cyber
-    layout rather than rebuilding from geography, so local structure (a hub
-    and its spokes) survives as it moves next to its points of presence.
+def hybrid(n: int, src, dst, geo_ll, pins, located=None, km: float = 100.0,
+           seed: int = 1) -> tuple[np.ndarray, np.ndarray]:
+    """Pin some geolocated networks to the map, then let Opte LGL grow and
+    relax everything else around them (netmap/native/lgl_opte.c with pins),
+    so the layout graph's free subtrees come out as Opte families (a hub's
+    spokes all around it) next to the pins they hang from.
 
-    Each stop solves a least-squares (Laplacian) deformation over the layout
-    graph's links (src, dst):
-
-        min  sum_ij w_ij |(x_i - x_j) - s (c_i - c_j)|^2 + lam sum_i pin_i |x_i - g_i|^2
-
-    c is the cyber layout, g the geo one, pin_i in [0, 1] how much a node's
-    geolocation is trusted. Along the way the cyber shape shrinks (s goes
-    from 1 to a scale where a typical link is ``km`` long) and the geo pins
-    strengthen (lam_mid at the halfway stop, the hybrid); links between hubs
-    loosen first, so the backbone stretches across geography while small
-    families keep their form. Returns (lon, lat) per stop.
+    ``pins``: bool [n]; ``located``: which geo_ll are real (default all).
+    ``km``: the length of one LGL unit on the map (links
+    rest at half a unit, neighbours repel within one). A tree of the layout
+    graph without any pin keeps its best-connected geolocated node as one.
     """
     t0 = time.time()
-    C = np.stack(lonlat_to_merc(*cyber_ll), 1).astype(np.float64)
-    Gm = np.stack(lonlat_to_merc(*geo_ll), 1).astype(np.float64)
     src = np.asarray(src, np.int64)
     dst = np.asarray(dst, np.int64)
-    pin = np.clip(np.asarray(pin_w, np.float64), 0, 1)
-    deg = np.bincount(np.concatenate([src, dst]), minlength=n)
-    family = np.minimum(deg[src], deg[dst]) <= 2  # a link inside a small family
-    el = np.hypot(*(C[src] - C[dst]).T)
-    s_min = (km / 40075.0) / max(float(np.median(el[el > 0])) if (el > 0).any() else 1.0, 1e-12)
-    out = [tuple(cyber_ll)]
-    prev = C
-    for k in range(1, stops - 1):
-        t = k / (stops - 1)
-        u = min(1.0, t / 0.5)
-        s = float(np.exp(np.log(s_min) * u))  # 1 -> s_min by the halfway stop
-        lam = lam_mid * (t / (1 - t)) ** 2  # lam_mid at the halfway stop
-        w = np.where(family, 1.0, 1.0 + (0.02 - 1.0) * u)
-        A = sp.coo_matrix((w, (src, dst)), shape=(n, n))
-        A = (A + A.T).tocsr()
-        Lap = (sp.diags(np.asarray(A.sum(1)).ravel()) - A).tocsr()
-        pw = lam * pin + 1e-6  # a whisper of anchoring keeps islands well-posed
-        anchor = np.where(pin[:, None] > 0, Gm, 0.5 + (C - 0.5) * s)
-        M = (Lap + sp.diags(pw)).tocsr()
-        X = np.empty_like(C)
-        for d in range(2):
-            b = s * (Lap @ C[:, d]) + pw * anchor[:, d]
-            X[:, d], _ = spla.cg(M, b, x0=prev[:, d], rtol=1e-8, maxiter=3000)
-        X = np.clip(X, 0.001, 0.999)
-        out.append(merc_to_lonlat(X[:, 0], X[:, 1]))
-        prev = X
-    # the last stop is geo; nodes without a location stay where the previous stop put them
-    glon, glat = (np.asarray(v, np.float64).copy() for v in geo_ll)
-    plon, plat = out[-1]
-    nogeo = pin <= 0
-    glon[nogeo], glat[nogeo] = np.asarray(plon)[nogeo], np.asarray(plat)[nogeo]
-    out.append((glon, glat))
-    _log(f"cyber->geo morph, {stops} stops (pinned {int((pin > 0).sum())}, typical link {km:.0f} km at hybrid)", t0)
-    return out
-
-
+    G = np.stack(lonlat_to_merc(*geo_ll), 1).astype(np.float64)
+    has = np.isfinite(G).all(1) & (True if located is None else np.asarray(located, bool))
+    pins = np.asarray(pins, bool) & has
+    g = ig.Graph(n=n, edges=np.stack([src, dst], 1).tolist())
+    deg = np.asarray(g.degree())
+    extra = 0
+    for comp in g.connected_components():
+        c = np.asarray(comp)
+        if pins[c].any() or not has[c].any():
+            continue
+        cand = c[has[c]]
+        pins[cand[np.argmax(deg[cand])]] = True
+        extra += 1
+    u = 40075.0 / km  # LGL units per Mercator unit
+    xy = native.lgl_opte(n, src, dst, pins=pins, pin_xy=np.where(has[:, None], G, 0.5) * u, seed=seed) / u
+    xy = np.clip(xy, 0.001, 0.999)
+    _log(f"hybrid: {int(pins.sum())} pinned ({extra} for trees without one), LGL on the rest, {km:.0f} km/unit", t0)
+    return merc_to_lonlat(xy[:, 0], xy[:, 1])
