@@ -17,6 +17,8 @@ export async function listDatasets(base) {
   return r.json();
 }
 
+const MORPH_STOPS = 9;
+
 export async function loadBundle(base, id) {
   const root = `${base}/${id}`;
   const meta = await (await fetch(`${root}/meta.json`)).json();
@@ -30,6 +32,23 @@ export async function loadBundle(base, id) {
   }
   const n = meta.counts.nodes;
   const e = meta.counts.edges;
+
+  // The cyber -> geo slider's stops (main.js layoutSec): cyber, hybrid and
+  // geo, with blends between them so the eye can follow nodes along.
+  meta.morph = ['pos_cyber'];
+  for (let k = 1; k < MORPH_STOPS - 1; k++) {
+    const t = (2 * k) / (MORPH_STOPS - 1); // 0..2: cyber -> hybrid -> geo
+    if (t === 1) {
+      meta.morph.push('pos_hybrid');
+      continue;
+    }
+    const [p, q, f] = t < 1 ? [a.pos_cyber, a.pos_hybrid, t] : [a.pos_hybrid, a.pos_geo, t - 1];
+    const m = new Float32Array(2 * n);
+    for (let j = 0; j < 2 * n; j++) m[j] = p[j] + (q[j] - p[j]) * f;
+    a[`pos_m${k}`] = m;
+    meta.morph.push(`pos_m${k}`);
+  }
+  meta.morph.push('pos_geo');
 
   // CSR adjacency for neighbour lookups.
   const deg = new Uint32Array(n + 1);

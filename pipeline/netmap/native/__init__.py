@@ -101,6 +101,7 @@ def load():
         ctypes.POINTER(ctypes.c_int32), ctypes.POINTER(ctypes.c_int32), ctypes.POINTER(ctypes.c_double),
         ctypes.c_int32, ctypes.c_int32, ctypes.c_int32, ctypes.c_int32,
         ctypes.c_uint64, ctypes.c_int32,
+        ctypes.POINTER(ctypes.c_uint8), ctypes.POINTER(ctypes.c_double),
         ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_int32),
     ]
     lib.netmap_sample_rank.restype = ctypes.c_int
@@ -156,27 +157,37 @@ def lgl(n: int, src, dst, root: int = 0, maxiter: int = 150, maxdelta: float = 0
 
 def lgl_opte(n: int, src, dst, weights=None, root: int = -1, tree_only: bool = True,
              leaves_close: int = 2, maxiter: int = 150, seed: int = 1,
-             threads: int | None = None, return_levels: bool = False):
+             threads: int | None = None, return_levels: bool = False, pins=None, pin_xy=None):
     """Opte-style LGL (port of lglayout, see lgl_opte.c); returns float64 [n, 2]
     in lglayout units (neighbours ~1 apart), plus tree depths if asked.
     ``weights``: lower = kept in the guiding tree (lglayout -O); default
     prefers links between hubs. ``root=-1``: the tree median. ``leaves_close``:
     0 off, 1 every family starts on its parent (lglayout -L as it behaves),
-    2 only families that are all leaves (-L as intended)."""
+    2 only families that are all leaves (-L as intended). ``pins`` (bool [n])
+    and ``pin_xy`` ([n, 2], layout units): nodes held in place while LGL
+    grows and relaxes the rest around them."""
     lib = load()
     s = np.ascontiguousarray(src, dtype=np.int32)
     d = np.ascontiguousarray(dst, dtype=np.int32)
     w = None if weights is None else np.ascontiguousarray(weights, dtype=np.float64)
     if w is not None and len(w) != len(s):
         raise ValueError("one weight per edge")
+    if (pins is None) != (pin_xy is None):
+        raise ValueError("pins and pin_xy go together")
+    pm = None if pins is None else np.ascontiguousarray(pins, dtype=np.uint8)
+    pxy = None if pin_xy is None else np.ascontiguousarray(pin_xy, dtype=np.float64).reshape(n, 2)
+    if pm is not None and len(pm) != n:
+        raise ValueError("one pin flag per node")
     out = np.empty((n, 2), dtype=np.float64)
     lev = np.empty(n, dtype=np.int32)
     i32p, f64p = ctypes.POINTER(ctypes.c_int32), ctypes.POINTER(ctypes.c_double)
+    u8p = ctypes.POINTER(ctypes.c_uint8)
     rc = lib.netmap_lgl_opte(
         n, len(s), s.ctypes.data_as(i32p), d.ctypes.data_as(i32p),
         None if w is None else w.ctypes.data_as(f64p), root, int(tree_only), int(leaves_close),
-        maxiter, seed & (2**64 - 1), threads or cpu_count(), out.ctypes.data_as(f64p),
-        lev.ctypes.data_as(i32p),
+        maxiter, seed & (2**64 - 1), threads or cpu_count(),
+        None if pm is None else pm.ctypes.data_as(u8p), None if pxy is None else pxy.ctypes.data_as(f64p),
+        out.ctypes.data_as(f64p), lev.ctypes.data_as(i32p),
     )
     if rc != 0:
         raise RuntimeError(f"netmap_lgl_opte failed: {ERRORS.get(rc, rc)}")

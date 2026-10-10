@@ -7,11 +7,10 @@ basemaps (the cyber layout simply ignores the basemap).
 * geo:    every geolocated AS at its dominant site; co-located ASes are fanned
           out on a sunflower spiral (largest in the middle) so they separate
           as you zoom in.
-* hybrid: ASes whose address space is concentrated in one metro are pinned at
-          their site; everything else (global transit, CDNs, national
-          backbones, ASes without geo) is placed by the graph: a harmonic
-          (Tutte) embedding against the pinned nodes, then a short
-          Fruchterman-Reingold relaxation with pinned nodes held fixed.
+* hybrid: well-connected networks with a firm location are pinned at their
+          site, then Opte LGL lays out everything else around them, so the
+          free subtrees keep the cyber look (hub and spoke) next to their
+          pins. The viewer's cyber -> geo slider blends cyber, hybrid, geo.
 """
 
 from __future__ import annotations
@@ -23,8 +22,6 @@ import time
 
 import igraph as ig
 import numpy as np
-import scipy.sparse as sp
-import scipy.sparse.linalg as spla
 
 from . import native
 
@@ -191,78 +188,38 @@ def geo(lat, lon, has_geo, weight):
     return sunflower(lon, lat, weight, has_geo)
 
 
-# --- hybrid ----------------------------------------------------------------
+# --- hybrid: pins, then LGL -------------------------------------------------
 
-def hybrid(g: ig.Graph, lat, lon, pinned, cyber_lonlat, fr_iters: int = 0,
-           local_shape: float = 0.25, world_units: float = 20000.0, seed: int = 1):
-    """Pinned nodes at (lon, lat); the rest by harmonic embedding.
+def hybrid(n: int, src, dst, geo_ll, pins, located=None, km: float = 100.0,
+           seed: int = 1) -> tuple[np.ndarray, np.ndarray]:
+    """Pin some geolocated networks to the map, then let Opte LGL grow and
+    relax everything else around them (netmap/native/lgl_opte.c with pins),
+    so the layout graph's free subtrees come out as Opte families (a hub's
+    spokes all around it) next to the pins they hang from.
 
-    Free nodes that share neighbourhoods would land on the same point, so each
-    is offset by ``local_shape`` times its displacement from its neighbours'
-    centroid in the cyber layout: the LGL's local structure, transplanted.
-    ``fr_iters`` > 0 adds a (slow, igraph) Fruchterman-Reingold relaxation.
+    ``pins``: bool [n]; ``located``: which geo_ll are real (default all).
+    ``km``: the length of one LGL unit on the map (links
+    rest at half a unit, neighbours repel within one). A tree of the layout
+    graph without any pin keeps its best-connected geolocated node as one.
     """
     t0 = time.time()
-    n = g.vcount()
-    px, py = lonlat_to_merc(lon, lat)
-    cx, cy = lonlat_to_merc(*cyber_lonlat)
-    el = np.asarray(g.get_edgelist(), np.int64)
-    A = sp.coo_matrix((np.ones(len(el)), (el[:, 0], el[:, 1])), shape=(n, n))
-    A = (A + A.T).tocsr()
-    A.data[:] = 1.0
-    deg = np.asarray(A.sum(1)).ravel()
-
-    U = np.flatnonzero(~pinned)
-    P = np.flatnonzero(pinned)
-    x = np.where(pinned, px, 0.0)
-    y = np.where(pinned, py, 0.0)
-    if len(U):
-        # (D_uu - A_uu + eps) x_u = A_up x_p + eps * x_cyber
-        # eps keeps islands with no pinned neighbour well-posed: they settle
-        # near the middle of the world, keeping their cyber shape.
-        eps = 1e-3
-        Auu = A[U][:, U]
-        Aup = A[U][:, P]
-        L = sp.diags(deg[U] + eps) - Auu
-        # Islands relax to a scaled copy of their cyber position around the
-        # centre of the map.
-        fx = 0.5 + (cx[U] - 0.5) * 0.35
-        fy = 0.5 + (cy[U] - 0.5) * 0.35
-        bx = Aup @ px[P] + eps * fx
-        by = Aup @ py[P] + eps * fy
-        x[U], _ = spla.cg(L, bx, x0=fx, rtol=1e-8, maxiter=2000)
-        y[U], _ = spla.cg(L, by, x0=fy, rtol=1e-8, maxiter=2000)
-    _log(f"hybrid harmonic embedding ({len(P)} pinned, {len(U)} free)", t0)
-
-    if local_shape > 0 and len(U):
-        with np.errstate(invalid="ignore", divide="ignore"):
-            mcx = np.asarray(A @ cx).ravel() / deg
-            mcy = np.asarray(A @ cy).ravel() / deg
-        dx = np.nan_to_num(cx - mcx)[U]
-        dy = np.nan_to_num(cy - mcy)[U]
-        x[U] += local_shape * dx
-        y[U] += local_shape * dy
-
-    if fr_iters > 0 and len(U):
-        # Relax: separate stacked leaves, keep pinned nodes fixed.
-        rng = np.random.default_rng(seed)
-        X = np.stack([x, y], 1) * world_units
-        X[U] += rng.normal(0, 0.5, (len(U), 2))
-        minx = X[:, 0].copy()
-        maxx = X[:, 0].copy()
-        miny = X[:, 1].copy()
-        maxy = X[:, 1].copy()
-        big = world_units * 2
-        minx[U], maxx[U], miny[U], maxy[U] = -big, big, -big, big
-        lay = g.layout_fruchterman_reingold(
-            seed=X.tolist(), niter=fr_iters, start_temp=world_units * 0.002,
-            minx=minx.tolist(), maxx=maxx.tolist(), miny=miny.tolist(), maxy=maxy.tolist(),
-            grid=True,
-        )
-        X2 = np.asarray(lay.coords) / world_units
-        x[U], y[U] = X2[U, 0], X2[U, 1]
-        _log("hybrid FR relaxation", t0)
-
-    x = np.clip(x, 0.001, 0.999)
-    y = np.clip(y, 0.001, 0.999)
-    return merc_to_lonlat(x, y)
+    src = np.asarray(src, np.int64)
+    dst = np.asarray(dst, np.int64)
+    G = np.stack(lonlat_to_merc(*geo_ll), 1).astype(np.float64)
+    has = np.isfinite(G).all(1) & (True if located is None else np.asarray(located, bool))
+    pins = np.asarray(pins, bool) & has
+    g = ig.Graph(n=n, edges=np.stack([src, dst], 1).tolist())
+    deg = np.asarray(g.degree())
+    extra = 0
+    for comp in g.connected_components():
+        c = np.asarray(comp)
+        if pins[c].any() or not has[c].any():
+            continue
+        cand = c[has[c]]
+        pins[cand[np.argmax(deg[cand])]] = True
+        extra += 1
+    u = 40075.0 / km  # LGL units per Mercator unit
+    xy = native.lgl_opte(n, src, dst, pins=pins, pin_xy=np.where(has[:, None], G, 0.5) * u, seed=seed) / u
+    xy = np.clip(xy, 0.001, 0.999)
+    _log(f"hybrid: {int(pins.sum())} pinned ({extra} for trees without one), LGL on the rest, {km:.0f} km/unit", t0)
+    return merc_to_lonlat(xy[:, 0], xy[:, 1])

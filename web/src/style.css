@@ -280,6 +280,25 @@ input[type="range"] { flex: 1; accent-color: var(--accent); }
 .seg button.on { background: var(--accent); color: #05070c; font-weight: 600; }
 .seg button:disabled { opacity: 0.35; cursor: default; }
 
+/* layout: a slider from cyber to geo, with the three named stops as jumps */
+.layout-group { align-items: flex-start; }
+.layout-group .label { padding-top: 4px; }
+.morph { flex: 1; display: flex; flex-direction: column; margin-left: 8px; }
+.morph input { width: 100%; }
+.ticks { display: flex; justify-content: space-between; margin: -2px 0 0; }
+.ticks button {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.ticks button:hover { color: var(--fg); background: var(--hover); }
+.ticks button.on { color: var(--accent); font-weight: 600; }
+
 details { margin: 8px 0; border-top: 1px solid var(--line); padding-top: 6px; }
 summary { cursor: pointer; color: var(--muted); }
 

@@ -117,22 +117,6 @@ def test_metrics_cone_and_level():
     assert m.rank[0] == 1 and 0 <= m.level.min() and m.level.max() <= 1
 
 
-def test_hybrid_keeps_pins_and_places_free_nodes_between():
-    t = _tiny_topology()
-    g = metrics.graph_of(t)
-    lat = np.array([0, 10, -10, 10, -10, 0, 0.0])
-    lon = np.array([0, 10, 10, -10, -10, 40, 60.0])
-    pinned = np.array([False, True, True, True, True, False, True])
-    cyber = layout.cyber(g)
-    lo, la = layout.hybrid(g, lat, lon, pinned, cyber, fr_iters=0)
-    assert np.allclose(lo[pinned], lon[pinned], atol=1e-6)
-    assert np.allclose(la[pinned], lat[pinned], atol=1e-3)
-    # Node 0 is surrounded by its four pinned customers (and a free peer).
-    assert abs(lo[0]) < 15 and abs(la[0]) < 5
-    # Node 5 sits between 0 and its pinned customer 6 at lon 60.
-    assert lo[0] < lo[5] < 60
-
-
 def test_cyber_layout_in_mercator_square():
     g = ig.Graph.Barabasi(300, 2, directed=False)
     lo, la = layout.cyber(g, algo="fr")
@@ -451,3 +435,32 @@ def test_ip2asn_boundaries_and_file(tmp_path):
     assert raw[:4] == b"NMIP" and int.from_bytes(raw[8:12], "little") == n == len(st)
     assert np.array_equal(np.frombuffer(raw, "<u4", n, 12), st)
     assert np.array_equal(np.frombuffer(raw, "<u4", n, 12 + 4 * n), an)
+
+
+def test_hybrid_grows_opte_families_around_pins():
+    """Hybrid pins the hubs to their cities and lets LGL place the rest: the
+    pins stay put and each hub's spokes come out as an Opte star around it,
+    nearer to it than to any other hub, a few hundred km across."""
+    from netmap import native
+
+    try:
+        native.load()
+    except native.NativeUnavailable:
+        pytest.skip("no C compiler")
+    hubs, spokes = 8, 30
+    n, el = hub_and_spoke_graph(hubs, spokes)
+    rng = np.random.default_rng(1)
+    glon = np.r_[rng.uniform(-150, 150, hubs), np.zeros(n - hubs)]
+    glat = np.r_[rng.uniform(-50, 60, hubs), np.zeros(n - hubs)]
+    pins = np.arange(n) < hubs
+    lon, lat = layout.hybrid(n, el[:, 0], el[:, 1], (glon, glat), pins, located=pins, km=100)
+    assert np.allclose(lon[:hubs], glon[:hubs], atol=1e-4) and np.allclose(lat[:hubs], glat[:hubs], atol=1e-4)
+    x, y = layout.lonlat_to_merc(lon, lat)
+    even, own = spoke_quality(np.stack([x, y], 1), n, el, hubs)
+    assert even > 0.6 and own > 0.95, (even, own)
+    owner = np.full(n, -1)
+    owner[el[el[:, 0] < hubs][:, 1]] = el[el[:, 0] < hubs][:, 0]
+    leaf = np.arange(n) >= hubs
+    km = 111 * np.hypot((lon[leaf] - glon[owner[leaf]]) * np.cos(np.radians(glat[owner[leaf]])),
+                        lat[leaf] - glat[owner[leaf]])
+    assert 20 < np.median(km) < 500, np.median(km)
