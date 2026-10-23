@@ -148,6 +148,70 @@ still drawn. Laying out the full graph (`--cyber-graph full`) gives a
 featureless ball, because multihoming and peering tie everything together.
 The provider tree is where the Opte starbursts come from.
 
+## Orbits: satellites and space networks on the globe
+
+The **orbits** control (globe only, off by default) draws the Earth's
+satellites, Starlink's whole constellation, Iridium NEXT and its
+crosslinks, and the Deep Space Network's antennas and live links into the
+3D globe, in the right places at the current time. Each sub-toggle
+(satellites, Starlink, Iridium, DSN) is in the permalink (`orbits`,
+`osats`, `ostarlink`, `oiridium`, `odsn`).
+
+netmap doesn't compute any of it. [celestiary](https://celestiary.org)
+does: its *layer mode* page (`layer.html`, celestiary/web#296) runs in a
+hidden cross-origin iframe and renders with three.js into a
+[portal-netgl](https://github.com/pablo-mayrgundter/portal/tree/main/packages/portal-netgl)
+recorder. Its WebGL calls come back by `postMessage` and are replayed into
+the globe's own context right after deck.gl draws (`attachNetGLDeckLayer`),
+in deck's clip space and against deck's depth, so the globe hides the far
+side's satellites and no pixels are copied. `src/orbits.js` is the host
+side; the protocol is portal's RFC 0001 (globe and orbit layers).
+
+* **The clock.** netmap sends UTC now with every view, rounded to a tick
+  (4 Hz; `?orbits_hz=1..30`), and redraws the globe once a tick while the
+  layer is on and the tab is visible. Off, or on the 2D map, or in a hidden
+  tab, nothing ticks. `?orbits_t=<ISO time>` stops the clock at a moment.
+* **The far plane.** While the layer is on, the globe's far plane is 4×
+  deck's default so the geostationary belt (6.6 Earth radii) fits from any
+  zoom.
+* **Hover.** The DSN's complexes and antennas, which the guest publishes as
+  anchors (`dsn:GDSCC`, `dsn:DSS-43`), show in the tooltip.
+* **Across engines.** With Starlink on, faint lines join AS14593 (SpaceX's
+  Starlink) to the four Starlink satellites nearest its node, re-picked
+  every minute.
+* **The 2D map** can't host it yet: Web Mercator isn't a 4×4 camera the
+  guest can draw with (RFC 0001, open question).
+* **Failure.** If the page doesn't load in 60 s, doesn't answer 20 s after
+  loading, doesn't finish loading its data in 90 s, or reports an error,
+  netmap removes it, shows a notice and turns the control off
+  (`?orbits_timeout=<s>` raises the limits on slow machines).
+
+**What loads from where.** Only while the control is on: the guest page and
+its scripts (about 230 KB gzipped, mostly three.js) and its data snapshots
+(the CelesTrak catalogue, Starlink, Iridium, the DSN's configuration) from
+celestiary.org, and the DSN Now live feed from `eyes.nasa.gov`, which the
+guest polls. netmap's own code for it is a 20 KB chunk loaded on first use.
+
+**Where the guest comes from.** Production is
+`https://celestiary.org/layer.html`. A build can change that with
+`VITE_ORBITS_SRC` and allow more origins with `VITE_ORBITS_ORIGINS`
+(comma-separated). A link can pick another page with `?orbits_src=<url>`,
+but only on an allowed origin, e.g. celestiary's PR previews,
+`?orbits_src=https://celestiary.org/web/pr-preview/pr-296/layer.html`.
+`localhost` and `127.0.0.1` are allowed only from a dev server or a
+netmap served from localhost. The rules are in `src/orbitsConfig.js`
+(`npm test`).
+
+**Privacy.** The iframe is a third party. Turning the layer on makes your
+browser request celestiary.org (and, through it, `eyes.nasa.gov`), which
+see your IP address and, from the `Referer` and the `host=` parameter,
+that netmap embedded them. netmap sends the guest only the camera, the
+viewport size and the time, and the anchor patterns it wants; never what
+you search, select or trace. The guest's draw calls are replayed only as
+WebGL calls (portal-netgl refuses anything else), and the frame is
+sandboxed (`allow-scripts allow-same-origin`: no navigating netmap,
+popups or forms). Messages are pinned to the guest's origin both ways.
+
 ## Data
 
 | source | used for | licence |

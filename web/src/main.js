@@ -10,6 +10,7 @@ import countries110 from 'world-atlas/countries-110m.json';
 import { listDatasets, loadBundle } from './data.js';
 import { route } from './route.js';
 import { parseTrace, loadLookups, resolveTrace, ipText } from './trace.js';
+import { orbitsQuery, resolveOrbitsSrc } from './orbitsConfig.js';
 
 // Material Icons (Apache-2.0), the same glyphs as MUI's icons, inlined as SVG.
 import hubIcon from '@material-design-icons/svg/filled/hub.svg?raw';
@@ -97,6 +98,12 @@ const PARAMS = [
   ['fiberCell', 'cell', 'num', 1], // 0..1 -> ~5..650 km
   ['fiberWidth', 'fw', 'num', 0.1],
   ['glow', 'glow', 'bool', true],
+  // The Orbits layer (celestiary, in a cross-origin iframe; src/orbits.js): globe only.
+  ['orbits', 'orbits', 'bool', false],
+  ['orbitSats', 'osats', 'bool', true],
+  ['orbitStarlink', 'ostarlink', 'bool', true],
+  ['orbitIridium', 'oiridium', 'bool', true],
+  ['orbitDsn', 'odsn', 'bool', true],
   ['panelOpen', 'panel', 'bool', true], // controls card shown (else its icon)
   ['detailsOpen', 'details', 'bool', true], // details card shown when something is selected
 ];
@@ -169,12 +176,33 @@ map.addControl(overlay);
 
 let globe = null;
 let globeCam = null; // globe's current view state, for permalinks
+let globeDevice = null; // deck's luma device, for the Orbits layer
+// deck puts the far plane just past the globe's far side. The Orbits layer
+// reaches GEO (6.6 Earth radii); 4x the far plane covers it from any zoom
+// ((altitude + 7.6 R) < 4 (altitude + 2 R)). Only while it's on: the wider
+// depth range costs the globe's own layers some precision.
+const globeView = () => new GlobeView({ resolution: 5, farZMultiplier: orbitsWanted() ? 4 : 1 });
+let globeFar = 1;
+let globeDrawn = false; // the globe has drawn a frame with the map's data
 function ensureGlobe() {
   if (globe) return globe;
   const c = map.getCenter();
+  globeFar = orbitsWanted() ? 4 : 1;
   globe = new Deck({
     parent: $('globe'),
-    views: new GlobeView({ resolution: 5 }),
+    views: globeView(),
+    onDeviceInitialized: (device) => {
+      globeDevice = device;
+    },
+    // The Orbits layer starts after the globe has drawn the map once, so the
+    // guest doesn't compete with netmap's first paint (on a slow GPU the two
+    // contexts share one GPU process). Its adapter chains this hook.
+    onAfterRender: () => {
+      if (!globeDrawn && G && globe?.props.layers.length > earth.length) {
+        globeDrawn = true;
+        setTimeout(syncOrbits);
+      }
+    },
     initialViewState: (globeCam = { longitude: c.lng, latitude: c.lat, zoom: (globeZoom = Math.max(map.getZoom() - 0.6, 0)) }),
     layers: [],
     onHover: onHover,
@@ -1094,17 +1122,21 @@ const earth = (() => {
   ];
 })();
 
+let globeLayers = []; // the globe's own layers, as render() last set them (the Orbits links go on top)
 function render() {
   const globeView = state.view === 'globe';
   $('map').hidden = globeView;
   $('globe').hidden = !globeView;
   if (globeView) {
-    ensureGlobe().setProps({ layers: [...earth, ...networkLayers(true)] });
+    const deck = ensureGlobe(); // first: it sets globeZoom, which the layers' opacity reads
+    globeLayers = [...earth, ...networkLayers(true)];
+    deck.setProps({ layers: [...globeLayers, ...orbitLinkLayers()] });
     overlay.setProps({ layers: [] });
   } else {
     overlay.setProps({ layers: networkLayers(false), onHover, onClick });
     if (map.getLayer('base')) map.setPaintProperty('base', 'raster-opacity', basemapOpacity());
   }
+  syncOrbits();
   syncControls();
   updateTitle();
   writeHashSoon(); // browsers throttle history.replaceState; never per frame
@@ -1135,6 +1167,8 @@ function pickedNode(info) {
 function onHover(info) {
   const tip = $('tooltip');
   const picked = pickedNode(info);
+  // An Orbits anchor (a DSN complex or antenna) under the pointer, if nothing of ours is.
+  const anchor = picked === null && !info.layer && orbits && state.view === 'globe' && info.x >= 0 ? orbits.anchorAt(info.x, info.y) : null;
   if (picked !== null) {
     const i = picked;
     tip.hidden = false;
@@ -1147,6 +1181,17 @@ function onHover(info) {
     tip.textContent = G.edge_weight
       ? `fiber: ${fmt(f.count)} router links (${fmt(f.transit)} transit/backbone, ${fmt(f.peering)} peering)`
       : `fiber: ${fmt(f.count)} links (${fmt(f.transit)} transit, ${fmt(f.peering)} peering)`;
+    tip.style.left = `${info.x + 12}px`;
+    tip.style.top = `${info.y + 12}px`;
+  } else if (info.layer?.id === 'orbit-links' && info.object) {
+    const { anchor } = info.object;
+    tip.hidden = false;
+    tip.textContent = `AS14593 · ${G.names[STARLINK_NODE()] ?? 'SpaceX'} ↔ ${anchor.name || anchor.id} (${anchor.id}, ${fmt(Math.round(info.object.altKm))} km up)`;
+    tip.style.left = `${info.x + 12}px`;
+    tip.style.top = `${info.y + 12}px`;
+  } else if (anchor) {
+    tip.hidden = false;
+    tip.textContent = `${ANCHOR_KIND[anchor.kind] ?? anchor.kind ?? 'Anchor'} · ${anchor.name || anchor.id} (${anchor.id})`;
     tip.style.left = `${info.x + 12}px`;
     tip.style.top = `${info.y + 12}px`;
   } else {
@@ -1773,6 +1818,7 @@ function syncControls() {
   $('basemap').disabled = state.view === 'globe';
   $('renderer').disabled = state.view === 'globe';
   $('renderer').value = state.renderer;
+  syncOrbitsControls();
 }
 
 function writeHash() {
@@ -1871,6 +1917,13 @@ function wireControls() {
     $(id).addEventListener('change', (e) => {
       state[key] = e.target.checked;
       if (key === 'backboneOnly') updateRaster();
+      render();
+    });
+  }
+  for (const id of ['orbits', 'orbitSats', 'orbitStarlink', 'orbitIridium', 'orbitDsn']) {
+    $(id).checked = state[id];
+    $(id).addEventListener('change', (e) => {
+      state[id] = e.target.checked;
       render();
     });
   }
@@ -2009,6 +2062,177 @@ function wireFlightKeys() {
   window.addEventListener('blur', () => held.clear());
 }
 
+// --- orbits --------------------------------------------------------------
+// celestiary's satellites and space networks in the globe (src/orbits.js,
+// README "Orbits"). Loaded on first use; the iframe lives while the control
+// is on, and pauses (no ticks, no frames) on the 2D map, whose Web Mercator
+// projection no 4x4 camera can hand the guest.
+
+const ORBITS = resolveOrbitsSrc({
+  param: params.get('orbits_src'),
+  envSrc: import.meta.env.VITE_ORBITS_SRC || '',
+  envOrigins: import.meta.env.VITE_ORBITS_ORIGINS || '',
+  pageOrigin: location.origin,
+  dev: import.meta.env.DEV,
+});
+if (ORBITS.rejected) {
+  console.warn(`[orbits] ?orbits_src=${ORBITS.rejected} is not on an allowed origin; using ${ORBITS.src}`);
+  orbitsNotice(`Orbits: ${new URL(ORBITS.src).host} is used instead of the page in ?orbits_src=, which isn't on an allowed origin.`);
+}
+// The clock's tick: how often the satellites move while nothing else redraws.
+const ORBITS_TICK_MS = 1000 / Math.min(30, Math.max(1, Number(params.get('orbits_hz')) || 4));
+// ?orbits_t=<ISO time> stops the clock there (a link to a moment, and tests).
+const ORBITS_T = Date.parse(params.get('orbits_t') || '');
+const ANCHOR_KIND = { 'dsn-site': 'DSN complex', 'dsn-dish': 'DSN antenna', spacecraft: 'Spacecraft', starlink: 'Starlink', iridium: 'Iridium', satellite: 'Satellite' };
+const STARLINK_ASN = 14593;
+const STARLINK_NODE = () => G?.byAsn.get(STARLINK_ASN);
+
+let orbits = null; // the running layer (startOrbits' handle)
+let orbitsKey = ''; // what it was started with
+let orbitsModule = null; // import('./orbits.js'), once asked for
+let orbitsMod = null; // ... and once it's here
+let orbitsStatus = '';
+
+const orbitsWanted = () => state.orbits && orbitsQuery(orbitsWhat()).any;
+const orbitsWhat = () => ({ sats: state.orbitSats, starlink: state.orbitStarlink, iridium: state.orbitIridium, dsn: state.orbitDsn });
+
+function orbitsNotice(text) {
+  const el = $('notice');
+  el.textContent = text;
+  el.hidden = false;
+  clearTimeout(orbitsNotice.timer);
+  orbitsNotice.timer = setTimeout(() => (el.hidden = true), 8000);
+}
+
+// Start, stop, restart (the sub-toggles change the guest's query) or pause
+// the layer to match the state. Cheap when nothing changed: render() calls it.
+function syncOrbits() {
+  const want = orbitsWanted();
+  const far = want ? 4 : 1;
+  if (globe && far !== globeFar) {
+    globeFar = far;
+    globe.setProps({ views: globeView() });
+  }
+  const q = orbitsQuery(orbitsWhat());
+  const key = want ? `${ORBITS.src}|${q.nets}|${q.sats}` : '';
+  if (orbits && (orbits.disposed || orbitsKey !== key)) {
+    if (!orbits.disposed) orbits.dispose();
+    orbits = null;
+    orbitsStatus = '';
+  }
+  if (!want) return;
+  if (orbits) {
+    orbits.setActive(state.view === 'globe');
+    updateOrbitLinkTarget();
+    return;
+  }
+  if (state.view !== 'globe' || !globe || !globeDevice || !globeDrawn) return;
+  if (!orbitsModule) {
+    orbitsModule = import('./orbits.js').then((mod) => (orbitsMod = mod));
+    orbitsModule.then(() => syncOrbits(), (err) => orbitsFailed(`couldn't load the layer's code (${err.message})`));
+    return;
+  }
+  orbitsModule.then((mod) => {
+    if (orbits || !orbitsWanted() || state.view !== 'globe') return;
+    orbitsKey = key;
+    orbitsStatus = `connecting to ${new URL(ORBITS.src).host}…`;
+    orbits = mod.startOrbits({
+      deck: globe,
+      device: globeDevice,
+      src: ORBITS.src,
+      origin: ORBITS.origin,
+      query: q,
+      tickMs: ORBITS_TICK_MS,
+      now: Number.isFinite(ORBITS_T) ? () => ORBITS_T : Date.now,
+      live: !Number.isFinite(ORBITS_T),
+      timeoutMs: (Number(params.get('orbits_timeout')) || 0) * 1000, // seconds, for slow machines
+      onStatus: ({ status, partial }) => {
+        orbitsStatus =
+          status === 'ready'
+            ? `${Number.isFinite(ORBITS_T) ? `at ${new Date(ORBITS_T).toISOString().slice(0, 16)}Z` : 'live, UTC now'}${partial ? ` · missing ${partial.join(', ')}` : ''}`
+            : status === 'loading'
+              ? 'loading orbits…'
+              : status;
+        syncOrbitsControls();
+      },
+      onFail: (message) => orbitsFailed(message),
+      onAnchors: () => refreshOrbitLinks(),
+    });
+    updateOrbitLinkTarget();
+    syncOrbitsControls();
+  });
+}
+
+function orbitsFailed(message) {
+  orbits = null;
+  orbitsKey = '';
+  orbitsStatus = '';
+  state.orbits = false;
+  $('orbits').checked = false;
+  orbitsNotice(`Orbits turned off: ${message}.`);
+  render();
+}
+
+function syncOrbitsControls() {
+  const globeView = state.view === 'globe';
+  $('orbits').disabled = !globeView;
+  for (const id of ['orbitSats', 'orbitStarlink', 'orbitIridium', 'orbitDsn']) $(id).disabled = !globeView || !state.orbits;
+  $('orbitNets').classList.toggle('off', !globeView || !state.orbits);
+  $('orbitsLabel').textContent = !globeView
+    ? 'globe only: the 2D map has no 3D camera to share yet'
+    : state.orbits
+      ? orbitsQuery(orbitsWhat()).any
+        ? orbitsStatus
+        : 'pick something to show'
+      : `from ${new URL(ORBITS.src).host}`;
+}
+
+// The cross-engine link: AS14593 (SpaceX's Starlink) joined to the few
+// Starlink satellites nearest its node, as celestiary publishes them.
+function starlinkNodeLngLatAlt() {
+  const i = STARLINK_NODE();
+  if (i === undefined || !visibleNode(i)) return null;
+  return pos(i, [0, 0, 0]);
+}
+
+function updateOrbitLinkTarget() {
+  if (!orbits || !orbitsMod || !G) return;
+  const p = state.orbitStarlink ? starlinkNodeLngLatAlt() : null;
+  orbits.setLinkTarget(p ? { ecef: orbitsMod.lngLatAltToEcef(p, orbits.earthRadius()), count: 4 } : null);
+}
+
+function orbitLinkLayers() {
+  const links = orbits && state.view === 'globe' && state.orbitStarlink ? orbits.links() : [];
+  const from = links.length && G ? starlinkNodeLngLatAlt() : null;
+  if (!from) return [];
+  const R = orbits.earthRadius();
+  const data = links.map((anchor) => {
+    const to = orbitsMod.ecefToLngLatAlt(anchor.ecef, R);
+    return { anchor, from, to, altKm: to[2] / 1000 };
+  });
+  return [
+    new LineLayer({
+      id: 'orbit-links',
+      data,
+      getSourcePosition: (d) => d.from,
+      getTargetPosition: (d) => d.to,
+      getColor: [120, 205, 255, 110],
+      getWidth: 1.2,
+      widthUnits: 'pixels',
+      pickable: true,
+    }),
+  ];
+}
+
+// New anchors: redraw the links (and only them) if there are any.
+function refreshOrbitLinks() {
+  if (!globe || state.view !== 'globe') return;
+  const had = refreshOrbitLinks.had;
+  const links = orbitLinkLayers();
+  refreshOrbitLinks.had = links.length > 0;
+  if (links.length || had) globe.setProps({ layers: [...globeLayers, ...links] });
+}
+
 // --- boot ----------------------------------------------------------------
 
 async function load(id) {
@@ -2113,6 +2337,7 @@ window.netmap = {
     return { x, y };
   },
   byAsn: (asn) => G.byAsn.get(asn),
+  orbits: () => orbits, // the Orbits layer, while it's on (src/orbits.js)
   // what one zoom event costs on the main thread (perf probes)
   zoomStep: (dz) => {
     if (state.view === 'globe') globeZoom += dz;

@@ -49,6 +49,19 @@
         </div>
       </div>
 
+      <div class="group orbits-group">
+        <label class="check" title="celestiary's Earth satellites and space networks, drawn into the globe by celestiary.org in a hidden frame (see README: Orbits)">
+          <input id="orbits" type="checkbox" /> orbits <span class="muted">· satellites, Starlink, DSN</span>
+        </label>
+        <div id="orbitNets" class="sub-checks">
+          <label class="check" title="The CelesTrak catalogue's notable satellites: the ISS, GPS, the geostationary belt"><input id="orbitSats" type="checkbox" checked /> satellites</label>
+          <label class="check" title="Starlink's whole constellation; the nearest few are joined to AS14593"><input id="orbitStarlink" type="checkbox" checked /> Starlink</label>
+          <label class="check" title="Iridium NEXT and its crosslinks"><input id="orbitIridium" type="checkbox" checked /> Iridium + crosslinks</label>
+          <label class="check" title="The Deep Space Network's antennas and their live links (DSN Now)"><input id="orbitDsn" type="checkbox" checked /> Deep Space Network</label>
+        </div>
+        <div class="hint" id="orbitsLabel"></div>
+      </div>
+
       <label class="row">
         <span>Basemap</span>
         <select id="basemap">
@@ -135,6 +148,7 @@
     </aside>
 
     <div id="tooltip" hidden></div>
+    <div id="notice" role="status" aria-live="polite" hidden></div>
     <script type="module" src="./src/main.js"></script>
   </body>
 </html>

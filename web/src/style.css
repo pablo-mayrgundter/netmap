@@ -340,3 +340,29 @@ summary { cursor: pointer; color: var(--muted); }
   #info { top: auto; bottom: 12px; width: calc(100% - 24px); max-height: 44vh; }
   #infoFab { top: auto; bottom: 12px; }
 }
+
+/* The Orbits control and its notice (src/orbits.js). */
+.orbits-group { display: block; }
+.orbits-group .muted { color: var(--muted); font-size: 11px; }
+.sub-checks { margin: 0 0 2px 22px; }
+.sub-checks .check { margin: 2px 0; font-size: 12px; }
+.sub-checks.off { opacity: 0.45; }
+.check:has(input:disabled) { opacity: 0.55; }
+#orbitsLabel:empty { display: none; }
+#notice {
+  position: absolute;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  z-index: 4;
+  background: rgba(40, 18, 10, 0.92);
+  border: 1px solid rgba(255, 158, 122, 0.55);
+  color: #ffc3a8;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  max-width: min(520px, calc(100vw - 32px));
+}
+#notice[hidden] { display: none; }
+/* The guest: rendering, but no box, no focus, not in the accessibility tree. */
+.orbits-guest { position: absolute; left: 0; top: 0; width: 0; height: 0; border: 0; opacity: 0; pointer-events: none; }
