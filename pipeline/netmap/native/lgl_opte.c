@@ -33,6 +33,13 @@
  *   4. tree_only lays out with the tree's edges (lglayout -y), otherwise
  *      with every edge between placed nodes.
  *
+ * Pins (not in lglayout): nodes with fixed positions, given in layout units.
+ * They are placed first and never move; the tree's levels then count hops
+ * from the nearest pinned node, so LGL grows the free nodes out from the
+ * pins (a family heads away from the parent's other placed neighbours) and
+ * relaxes only them. Trees without a pin are laid out as usual, around the
+ * pins' centre.
+ *
  * Differences: forces are gathered per node over a 3x3 grid of unit cells
  * (the same pairs lglayout's half-stencil visits, each counted once per
  * node), positions are double-buffered and randomness comes from a counter
@@ -83,7 +90,8 @@ typedef struct {
     int64_t m;       /* nodes placed (ranks [0, m)) */
     int64_t lstart;  /* first rank of the current level */
     const int64_t *off;
-    const int32_t *adj; /* layout graph, rank space */
+    const int32_t *adj;   /* layout graph, rank space */
+    const uint8_t *fixed; /* rank space; NULL: nothing pinned */
     float *x, *y, *nx, *ny;
     /* grid */
     float *sx, *sy;
@@ -178,6 +186,10 @@ static void step_job(void *ctx, int64_t lo, int64_t hi) {
     const float *restrict x = S->x, *restrict y = S->y;
     for (int64_t i = lo; i < hi; i++) {
         const float xi = x[i], yi = y[i];
+        if (S->fixed && S->fixed[i]) {
+            S->nx[i] = xi, S->ny[i] = yi;
+            continue;
+        }
         const int64_t c = S->cell_of[i], cx = c % S->gw, cy = c / S->gw;
         float fx = 0.f, fy = 0.f;
         int collide = 0;
@@ -318,19 +330,22 @@ static int csr(int32_t n, int64_t e, const int32_t *s, const int32_t *d, int64_t
  * root < 0 picks the tree median. tree_only: layout with tree edges only
  * (-y); leaves_close: 1 = every family starts on its parent (-L as it
  * behaves), 2 = only all-leaf families do (-L as meant). maxiter per level
- * (<= 0: 150). Writes x,y for each node to xy_out[2n]; levels_out[n]
- * (optional) gets each node's tree depth.
+ * (<= 0: 150). pinned[n] and pin_xy[2n] (both NULL, or both given): nodes
+ * held at fixed positions. Writes x,y for each node to xy_out[2n];
+ * levels_out[n] (optional) gets each node's tree depth (hops from a pin).
  */
 int netmap_lgl_opte(int32_t n, int64_t e, const int32_t *src, const int32_t *dst, const double *weight,
                     int32_t root, int32_t tree_only, int32_t leaves_close, int32_t maxiter, uint64_t seed,
-                    int32_t nthreads, double *xy_out, int32_t *levels_out) {
-    if (n <= 0 || root >= n) return OPTE_EINVAL;
+                    int32_t nthreads, const uint8_t *pinned, const double *pin_xy, double *xy_out,
+                    int32_t *levels_out) {
+    if (n <= 0 || root >= n || (!pinned) != (!pin_xy)) return OPTE_EINVAL;
     if (maxiter <= 0) maxiter = 150;
     if (nthreads <= 0) nthreads = cpu_count_online();
     int rc = OPTE_ENOMEM;
     int64_t *goff = NULL, *toff = NULL, *loff = NULL;
     int32_t *gadj = NULL, *tadj = NULL, *ladj = NULL, *uf = NULL, *ts = NULL, *td = NULL;
     int32_t *order = NULL, *rank = NULL, *tpar = NULL, *level = NULL, *layer_end = NULL, *comp_root = NULL;
+    uint8_t *fixed = NULL;
     int64_t *sub = NULL;
     double *dist = NULL;
     wedge_t *we = NULL;
@@ -394,6 +409,9 @@ int netmap_lgl_opte(int32_t n, int64_t e, const int32_t *src, const int32_t *dst
                 order[tail++] = v;
             }
         }
+        int has_pin = 0;
+        for (int32_t q = 0; q < tail && pinned && !has_pin; q++) has_pin = pinned[order[q]] != 0;
+        if (has_pin) continue; /* grown from its pins instead */
         for (int32_t q = 0; q < tail; q++) sub[order[q]] = 1;
         for (int32_t q = tail - 1; q > 0; q--) sub[tpar[order[q]]] += sub[order[q]];
         int32_t best = s0;
@@ -413,10 +431,13 @@ int netmap_lgl_opte(int32_t n, int64_t e, const int32_t *src, const int32_t *dst
     free(sub), sub = NULL;
     free(dist), dist = NULL;
 
-    /* 3. levels: BFS over the tree from the roots, all trees together, so
-     * ranks run level by level and each family is contiguous */
+    /* 3. levels: BFS over the tree from the pins and roots, all trees
+     * together, so ranks run level by level and each family is contiguous */
     for (int32_t i = 0; i < n; i++) rank[i] = -1;
     int32_t tail = 0;
+    for (int32_t i = 0; pinned && i < n; i++)
+        if (pinned[i]) order[tail] = i, rank[i] = tail++, tpar[i] = -1, level[i] = 0;
+    const int32_t npin = tail;
     for (int32_t c = 0; c < ncomp; c++) {
         int32_t r = comp_root[c];
         order[tail] = r, rank[r] = tail++, tpar[r] = -1, level[r] = 0;
@@ -465,16 +486,28 @@ int netmap_lgl_opte(int32_t n, int64_t e, const int32_t *src, const int32_t *dst
     S.part = malloc((size_t)(4 * ((n + CHUNK - 1) / CHUNK + 1)) * sizeof(float));
     if (!S.x || !S.y || !S.nx || !S.ny || !S.sx || !S.sy || !S.sid || !S.cell_of || !S.slot || !S.part) goto done;
     S.off = loff, S.adj = ladj, S.seed = mix64(seed);
+    if (npin > 0) {
+        fixed = calloc((size_t)n, 1);
+        if (!fixed) goto done;
+        for (int32_t r = 0; r < npin; r++) fixed[r] = 1;
+        S.fixed = fixed;
+    }
 
     pool_t pool;
     if (pool_init(&pool, nthreads) != 0) goto done;
 
-    /* roots: the first at the origin, others spread over a disc of radius
-     * sqrt(n) (lglayout lays components out separately) */
+    /* pins where they belong; roots: the first at the origin (or the pins'
+     * centre), others spread over a disc of radius sqrt(n) (lglayout lays
+     * components out separately) */
+    double ox = 0, oy = 0;
+    for (int32_t r = 0; r < npin; r++) {
+        S.x[r] = (float)pin_xy[2 * (size_t)order[r]], S.y[r] = (float)pin_xy[2 * (size_t)order[r] + 1];
+        ox += S.x[r] / npin, oy += S.y[r] / npin;
+    }
     for (int32_t c = 0; c < ncomp; c++) {
         double ang = 2 * M_PI * hash_unif(S.seed, 0x1000000000ull + c);
-        double rad = c ? sqrt((double)n) * sqrt(hash_unif(S.seed, 0x2000000000ull + c)) : 0;
-        S.x[c] = (float)(rad * cos(ang)), S.y[c] = (float)(rad * sin(ang));
+        double rad = c || npin ? sqrt((double)n) * sqrt(hash_unif(S.seed, 0x2000000000ull + c)) : 0;
+        S.x[npin + c] = (float)(ox + rad * cos(ang)), S.y[npin + c] = (float)(oy + rad * sin(ang));
     }
     /* has_kids[rank]: the node has children in the tree (for leaves_close 2) */
     uint8_t *has_kids = calloc((size_t)n, 1);
@@ -498,15 +531,31 @@ int netmap_lgl_opte(int32_t n, int64_t e, const int32_t *src, const int32_t *dst
             while (r1 < lend && tpar[order[r1]] == pu) r1++;
             const int32_t k = r1 - r;
             double spx = S.x[pr], spy = S.y[pr], rad = 1.0;
-            if (l > 1) {
+            if (l > 1 || npin > 0) {
                 double d1x = (S.x[pr] - cmx), d1y = (S.y[pr] - cmy);
                 double m1 = sqrt(d1x * d1x + d1y * d1y);
                 double dx = d1x * m1, dy = d1y * m1;
                 const int32_t gp = tpar[pu];
+                if (gp < 0 && npin > 0) {
+                    /* a pin or root: away from its placed neighbours, which
+                     * say where the rest of its network is */
+                    double mx = 0, my = 0;
+                    int64_t cnt = 0;
+                    for (int64_t p = loff[pr]; p < loff[pr + 1]; p++)
+                        if (ladj[p] < lstart) mx += S.x[ladj[p]], my += S.y[ladj[p]], cnt++;
+                    dx = cnt ? S.x[pr] - mx / cnt : 0, dy = cnt ? S.y[pr] - my / cnt : 0;
+                    if (dx * dx + dy * dy < 1e-12) {
+                        double ang = 2 * M_PI * hash_unif(S.seed, 0x3000000000ull + (uint64_t)pr);
+                        dx = cos(ang), dy = sin(ang);
+                    }
+                }
                 if (gp >= 0) {
                     double d2x = S.x[pr] - S.x[rank[gp]], d2y = S.y[pr] - S.y[rank[gp]];
                     double m2 = sqrt(d2x * d2x + d2y * d2y);
-                    if (m2 > 0) dx = 0.5 * (dx + d2x * m2), dy = 0.5 * (dy + d2y * m2);
+                    if (npin > 0) /* the centre of the world says nothing locally */
+                        dx = d2x, dy = d2y;
+                    else if (m2 > 0)
+                        dx = 0.5 * (dx + d2x * m2), dy = 0.5 * (dy + d2y * m2);
                 }
                 double m = sqrt(dx * dx + dy * dy);
                 double scalef = fmin(0.25 * sqrt((double)k), 10.0);
@@ -555,7 +604,7 @@ int netmap_lgl_opte(int32_t n, int64_t e, const int32_t *src, const int32_t *dst
 done:
     free(goff), free(gadj), free(toff), free(tadj), free(loff), free(ladj);
     free(uf), free(ts), free(td), free(order), free(rank), free(tpar), free(level);
-    free(layer_end), free(comp_root), free(sub), free(dist), free(we);
+    free(layer_end), free(comp_root), free(sub), free(dist), free(we), free(fixed);
     free(S.x), free(S.y), free(S.nx), free(S.ny), free(S.sx), free(S.sy);
     free(S.sid), free(S.cell_of), free(S.slot), free(S.cstart), free(S.part);
     return rc;

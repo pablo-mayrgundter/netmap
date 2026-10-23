@@ -115,10 +115,12 @@ def cmd_build(args):
     _step("geo layout")
     weight = np.log1p(m.degree) + np.log1p(addrs) * 0.1
     geo_ll = layout.geo(lat, lon, has_geo, weight)
-    _step(f"hybrid layout ({int(pinned.sum())} pinned)")
+    _step("hybrid layout (pins, then LGL)")
     plon, plat = geo_ll
-    hyb = layout.hybrid(g, plat, plon, pinned, cyber, fr_iters=args.fr_iters,
-                        local_shape=args.local_shape, seed=args.seed)
+    lel = np.asarray(lg.get_edgelist(), np.int64).reshape(-1, 2)
+    ldeg = np.bincount(lel.ravel(), minlength=topo.n)
+    hpin = pinned & (ldeg >= args.hybrid_pin_degree)
+    hyb = layout.hybrid(topo.n, lel[:, 0], lel[:, 1], geo_ll, hpin, has_geo, km=args.hybrid_km, seed=args.seed)
     _step("points of presence for floating ASes")
     sites_of = lambda i: prof.sites[rows[i]] if rows[i] >= 0 else []  # noqa: E731
     pp = pops.build(topo.n, topo.src, topo.dst, np.flatnonzero(has_geo & ~pinned), sites_of,
@@ -150,7 +152,7 @@ def cmd_build(args):
             "pops": [[pp.city[k], round(float(pp.share[k]), 3)]
                      for k in range(pp.offset[i], pp.offset[i + 1])],
             "concentration": round(float(conc[i]), 3),
-            "pinned": bool(pinned[i]),
+            "pinned": bool(hpin[i]),
             "degree": int(m.degree[i]),
             "providers": int(m.providers[i]),
             "customers": int(m.customers[i]),
@@ -165,7 +167,7 @@ def cmd_build(args):
     meta = export.write_bundle(
         out, name=args.name, topo=topo, metrics=m, prof_rows=rows,
         layouts={"cyber": cyber, "geo": (geo_lon, geo_lat), "hybrid": hyb},
-        region_idx=region_idx, has_geo=has_geo, pinned=pinned, names=names, backbone=bmask,
+        region_idx=region_idx, has_geo=has_geo, pinned=hpin, names=names, backbone=bmask,
         sample_rank=srank, pops=(pp, pp_lon, pp_lat),
         info_records=info, attribution=attribution,
     )
@@ -256,6 +258,9 @@ def cmd_build_itdk(args):
     bmask = itdk.max_spanning_forest(n, src, dst, weight)
     lg = ig.Graph(n=n, edges=np.stack([src[bmask], dst[bmask]], 1).tolist())
     cyber = layout.cyber(lg, algo=args.cyber, seed=args.seed)
+    bdeg = np.bincount(np.concatenate([src[bmask], dst[bmask]]), minlength=n)
+    hpin = bdeg >= args.hybrid_pin_degree
+    hyb = layout.hybrid(n, src[bmask], dst[bmask], geo_ll, hpin, km=args.hybrid_km, seed=args.seed)
     srank = metrics.sample_rank(topo, g, seed=args.seed)
 
     names, countries, info = [], [], []
@@ -279,8 +284,8 @@ def cmd_build_itdk(args):
     allpin = np.ones(n, bool)
     meta = export.write_bundle(
         out, name=args.name, topo=topo, metrics=m, prof_rows=None,
-        layouts={"cyber": cyber, "geo": geo_ll, "hybrid": geo_ll},
-        region_idx=region_idx, has_geo=allpin, pinned=allpin, names=names, info_records=info,
+        layouts={"cyber": cyber, "geo": geo_ll, "hybrid": hyb},
+        region_idx=region_idx, has_geo=allpin, pinned=hpin, names=names, info_records=info,
         attribution=attribution, backbone=bmask, sample_rank=srank, edge_weight=weight,
         kind="routers",
     )
@@ -344,10 +349,10 @@ def main(argv=None):
                    help="min share of an AS's addresses near its main site to pin it in hybrid")
     b.add_argument("--pin-max-cone", type=int, default=400,
                    help="ASes with bigger customer cones are never pinned (the core floats)")
-    b.add_argument("--fr-iters", type=int, default=0,
-                   help="optional igraph FR relaxation of free hybrid nodes (slow at full scale)")
-    b.add_argument("--local-shape", type=float, default=0.25,
-                   help="how much of the cyber layout's local structure free hybrid nodes keep")
+    b.add_argument("--hybrid-km", type=float, default=100.0,
+                   help="hybrid: map length of one LGL unit (links rest at half a unit)")
+    b.add_argument("--hybrid-pin-degree", type=int, default=10,
+                   help="hybrid: pin geolocated nodes with at least this many layout links; LGL places the rest")
     b.add_argument("--no-prefixes", dest="prefixes", action="store_false",
                    help="omit per-AS prefix lists from info records")
     b.add_argument("--seed", type=int, default=7)
@@ -362,6 +367,10 @@ def main(argv=None):
                    help="drop (AS, city) PoPs with fewer geolocated routers")
     r.add_argument("--date", help="CAIDA AS relationships snapshot YYYYMMDD (default latest)")
     r.add_argument("--cyber", default="opte", choices=["opte", "lgl", "lgl-igraph", "drl", "fr"])
+    r.add_argument("--hybrid-km", type=float, default=100.0,
+                   help="hybrid: map length of one LGL unit (links rest at half a unit)")
+    r.add_argument("--hybrid-pin-degree", type=int, default=10,
+                   help="hybrid: pin geolocated nodes with at least this many layout links; LGL places the rest")
     r.add_argument("--seed", type=int, default=7)
     r.set_defaults(fn=cmd_build_itdk)
 
