@@ -120,7 +120,7 @@ export function startOrbits({ deck, device, src, origin, query, tickMs, now = Da
   };
 
   // Pinned both ways: posts go to `origin` only, and only that window at
-  // that origin is heard (portal-netgl 0.4.0).
+  // that origin is heard (portal-netgl 0.5.0).
   const transport = iframeTransport(iframe, { origin, onReject: () => (stats.rejected += 1) });
 
   // The clock: UTC now, rounded to the tick, so an unchanged camera between
