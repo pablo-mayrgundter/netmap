@@ -125,6 +125,25 @@ export function drawsPerVsync(draws) {
 }
 
 /**
+ * For each guest frame, how long from its end to the next animation frame
+ * the page was given (`rafs`: animation frame times, ascending). A frame
+ * that lands and waits ~150 ms for its draw is either the adapter not
+ * asking (this is a few ms) or the browser not giving a frame (this is
+ * ~150 ms too: GPU back-pressure).
+ */
+export function frameEndToNextAnimationFrame(frames, rafs) {
+  const out = [];
+  let j = 0;
+  const ends = frames.map((f) => f.tEnd).filter(Number.isFinite).sort((a, b) => a - b);
+  for (const t of ends) {
+    while (j < rafs.length && rafs[j] < t) j += 1;
+    if (j >= rafs.length) break;
+    out.push(rafs[j] - t);
+  }
+  return out;
+}
+
+/**
  * For each input, how long until a deck draw showed a guest frame drawn for
  * a view sent after it (frames in arrival order, so their views' times rise).
  */
@@ -179,6 +198,7 @@ export function makeOrbitsPerf({ keep = 600 } = {}) {
   const inputs = []; // pointer / wheel / key input times
   const longFrames = []; // long animation frames (or long tasks)
   const guest = []; // the guest's own `layer:stats`
+  const rafs = []; // animation frame times (the probe's own rAF loop)
   let cur = null; // the guest frame being received
   let lastViewId = null; // the last layer:view posted
   let cam = 0; // camera version: bumped when deck's view matrix changes
@@ -195,9 +215,9 @@ export function makeOrbitsPerf({ keep = 600 } = {}) {
   let pendingAnchor = null; // an anchors message seen on the wire, not yet handled
   let busyType = null;
   const undo = [];
-  const push = (arr, x) => {
+  const push = (arr, x, max = keep) => {
     arr.push(x);
-    if (arr.length > keep) arr.shift();
+    if (arr.length > max) arr.shift();
   };
   const newFrame = (t) => ({ seq: frames.length ? frames[frames.length - 1].seq + 1 : 1, tFirst: t, tEnd: null, viewId: null, tView: null, wireMsgs: 0, deliveries: 0, calls: 0, bytes: 0, deserMs: 0, handleMs: 0, kinds: {}, names: {}, drawnIn: null, tDrawn: null });
   const frame = (t) => (cur ??= newFrame(t));
@@ -443,6 +463,20 @@ export function makeOrbitsPerf({ keep = 600 } = {}) {
       undo.push(() => target?.removeEventListener(type, on, { capture: true }));
     }
     startBusy();
+    startFrames();
+  };
+
+  // Animation frames: when the page was given one, whatever drew in it
+  // (deck's loop asks for one every frame anyway, so this adds none).
+  const startFrames = () => {
+    if (typeof requestAnimationFrame !== 'function') return;
+    let id = 0;
+    const loop = (ts) => {
+      push(rafs, performance.timeOrigin + ts, keep * 4);
+      id = requestAnimationFrame(loop);
+    };
+    id = requestAnimationFrame(loop);
+    undo.push(() => cancelAnimationFrame(id));
   };
 
   // The main thread: long animation frames (Chromium 123+; each 50 ms or
@@ -535,6 +569,11 @@ export function makeOrbitsPerf({ keep = 600 } = {}) {
       receiveSpanMs: stat(done.map((f) => f.tEnd - f.tFirst)),
       frameEndToDrawnMs: stat(shownFrames.map((f) => diff(f.tDrawn, f.tEnd))),
       viewToDrawnMs: stat(shownFrames.map((f) => diff(f.tDrawn, f.tView))),
+      // The browser's side: the gaps between animation frames, and from a
+      // guest frame's end to the next one (near frameEndToDrawnMs, the
+      // draw waited for a frame; far under it, the adapter didn't draw).
+      animationFrameGapMs: stat(rafs.slice(1).map((t, i) => t - rafs[i])),
+      frameEndToNextAnimationFrameMs: stat(frameEndToNextAnimationFrame(done, rafs)),
       // Frames replaced by a later one before a deck draw showed them.
       framesNotShown: done.length - shownFrames.length,
       msgsPerFrame: stat(done.map((f) => (onWire ? f.wireMsgs : f.deliveries))),
@@ -578,6 +617,7 @@ export function makeOrbitsPerf({ keep = 600 } = {}) {
     inputs: inputs.slice(-100),
     longFrames: longFrames.slice(),
     guest: guest.slice(),
+    animationFrames: rafs.slice(-keep),
   });
 
   let gpu = null;
@@ -661,6 +701,7 @@ export function makeOrbitsPerf({ keep = 600 } = {}) {
         `adapter redraws forced ${s.redraws?.forced ?? '–'}, folded ${s.redraws?.folded ?? '–'}; clock asks ${s.redraws?.clockRequests ?? '–'}\n` +
         `input→shown ms     ${f(s.inputToShownMs, 0)}\n` +
         `view→drawn ms      ${f(s.viewToDrawnMs, 0)}   lag ms ${f(s.lagMs, 0)}\n` +
+        `animation frame gap ms ${f(s.animationFrameGapMs, 0)}  frame end→next ${f(s.frameEndToNextAnimationFrameMs, 0)}\n` +
         `deck draw ms       ${f(s.deckDrawMs)}  replay ${f(s.replayMs)}\n` +
         `msgs/frame ${f(s.msgsPerFrame, 0)}  calls ${f(s.callsPerFrame, 0)}  kB/frame ${s.bytesPerFrame.median == null ? '–' : round(s.bytesPerFrame.median / 1024, 0)}\n` +
         `recv ms/frame deser ${s.deserMsPerFrame ? f(s.deserMsPerFrame) : 'n/a'} + handle ${f(s.handleMsPerFrame)}\n` +
@@ -680,5 +721,5 @@ export function makeOrbitsPerf({ keep = 600 } = {}) {
     if (deck?.__orbitsPerfDrawLayers) deck._drawLayers = deck.__orbitsPerfDrawLayers;
   };
 
-  return { wrapTransport, observe, attach, detach, guestStats, summary, snapshot, hud, frames, draws, views, anchors, inputs, longFrames, guest };
+  return { wrapTransport, observe, attach, detach, guestStats, summary, snapshot, hud, frames, draws, views, anchors, inputs, longFrames, guest, rafs };
 }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { argBytes, callBytes, callKind, drawsPerVsync, inputToShown, invokerKind, makeOrbitsPerf, unpack } from './orbitsPerf.js';
+import { argBytes, callBytes, callKind, drawsPerVsync, frameEndToNextAnimationFrame, inputToShown, invokerKind, makeOrbitsPerf, unpack } from './orbitsPerf.js';
 
 test('calls are grouped into the payload table’s families', () => {
   assert.equal(callKind('bufferSubData'), 'buffer');
@@ -128,6 +128,12 @@ test('input → shown: to the first frame drawn for a view sent after the input'
     { tView: 600, tDrawn: 900 },
   ];
   assert.deepEqual(inputToShown([{ t: 10 }, { t: 450 }, { t: 2000 }], frames), [390, 450]);
+});
+
+test('frame end → next animation frame: the browser’s wait, apart from the adapter’s', () => {
+  const frames = [{ tEnd: 15 }, { tEnd: 170 }, { tEnd: null }, { tEnd: 400 }];
+  // Frames at 0, 150, 300: the first frame waits 135 ms, the second 130.
+  assert.deepEqual(frameEndToNextAnimationFrame(frames, [0, 150, 300]), [135, 130]);
 });
 
 test('long frames’ scripts are sorted by who ran them', () => {

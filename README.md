@@ -231,6 +231,13 @@ layer's costs from netmap's side (`src/orbitsPerf.js`), medians and p95s:
 * the anchors: how many, and how long they take to receive;
 * the adapter's redraws for guest frames, forced or folded into a draw deck
   made anyway, and how many views the clock asked for;
+* the browser's animation frames: the gaps between them
+  (`animationFrameGapMs`), and from a guest frame's end to the next one
+  (`frameEndToNextAnimationFrameMs`). When a guest frame waits for its draw
+  (`frameEndToDrawnMs`) about as long as it waits for the next animation
+  frame, the browser wasn't giving the page a frame (GPU back-pressure), not
+  the adapter skipping a redraw; when the draw waits much longer, it's the
+  adapter;
 * the guest's own means a frame, if it reports them: netmap sends
   `layer:stats-subscribe`, and a guest that answers (celestiary#304) sends
   `layer:stats` about once a second, with `updateMs`, `renderMs`,
