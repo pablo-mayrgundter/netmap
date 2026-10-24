@@ -21,6 +21,7 @@
 // satellites would stand still between camera moves.
 
 import { attachNetGLDeckLayer, iframeTransport, mat4InvertRigid, projectToPixels } from '@pablo-mayrgundter/portal-netgl/core';
+import { makeOrbitsPerf } from './orbitsPerf.js';
 
 /**
  * How long the guest's page may take to load, then to say hello once it
@@ -67,8 +68,9 @@ export function lngLatAltToEcef([lng, lat, alt], radius) {
  * @param {(status: object) => void} [o.onStatus]
  * @param {(message: string) => void} [o.onFail] the layer gave up (it disposes itself first)
  * @param {() => void} [o.onAnchors] new anchors arrived
+ * @param {boolean} [o.perf] measure the layer and show its panel (?orbits_perf=1, src/orbitsPerf.js)
  */
-export function startOrbits({ deck, device, src, origin, query, tickMs, now = Date.now, live = true, timeoutMs = 0, onStatus = () => {}, onFail = () => {}, onAnchors = () => {} }) {
+export function startOrbits({ deck, device, src, origin, query, tickMs, now = Date.now, live = true, timeoutMs = 0, onStatus = () => {}, onFail = () => {}, onAnchors = () => {}, perf: wantPerf = false }) {
   const url = new URL(src);
   url.searchParams.set('host', location.origin);
   url.searchParams.set('nets', query.nets);
@@ -121,7 +123,9 @@ export function startOrbits({ deck, device, src, origin, query, tickMs, now = Da
 
   // Pinned both ways: posts go to `origin` only, and only that window at
   // that origin is heard (portal-netgl 0.5.0).
-  const transport = iframeTransport(iframe, { origin, onReject: () => (stats.rejected += 1) });
+  const perf = wantPerf ? makeOrbitsPerf() : null;
+  const pinned = iframeTransport(iframe, { origin, onReject: () => (stats.rejected += 1) });
+  const transport = perf ? perf.wrapTransport(pinned, iframe.contentWindow) : pinned;
 
   // The clock: UTC now, rounded to the tick, so an unchanged camera between
   // ticks sends no new view and deck goes quiet until the next one.
@@ -219,6 +223,12 @@ export function startOrbits({ deck, device, src, origin, query, tickMs, now = Da
     },
   });
   subscribe();
+  let stopHud = null;
+  if (perf) {
+    perf.attach(deck, layer);
+    stopHud = perf.hud(device.gl);
+    window.__orbitsPerf = Object.assign(perf, { deck, layer });
+  }
 
   // Tick while on and visible. The adapter redraws deck when a guest frame
   // arrives; this redraws once a tick so the time moves.
@@ -254,6 +264,8 @@ export function startOrbits({ deck, device, src, origin, query, tickMs, now = Da
     if (ticker) clearInterval(ticker);
     document.removeEventListener('visibilitychange', visibility);
     layer.detach();
+    stopHud?.();
+    perf?.detach(deck);
     iframe.remove();
     deck.redraw('orbits off');
   }
@@ -262,6 +274,7 @@ export function startOrbits({ deck, device, src, origin, query, tickMs, now = Da
     layer,
     iframe,
     stats,
+    perf,
     /** Pause (the 2D map) or resume (the globe) without reloading the guest. */
     setActive(on) {
       if (disposed || on === active) return;

@@ -2157,6 +2157,7 @@ function syncOrbits() {
       },
       onFail: (message) => orbitsFailed(message),
       onAnchors: () => refreshOrbitLinks(),
+      perf: params.get('orbits_perf') === '1',
     });
     updateOrbitLinkTarget();
     syncOrbitsControls();
