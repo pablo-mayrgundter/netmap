@@ -188,7 +188,12 @@ side; the protocol is portal's RFC 0001 (globe and orbit layers).
   reprojection (0.6.3, `reproject` on the adapter) now composes each guest
   frame for the globe's current view: the replay rewrites the guest's
   vertex shaders and corrects each `gl_Position` by C = VP_now · VP_frame⁻¹,
-  exact for positions (and depth). The satellites still move in time only
+  exact for positions (and depth). Wide lines (the DSN's beams, Iridium's
+  links) are extruded in pixels in the guest's shader, so a correction
+  after that scaled their width: since portal-netgl 0.6.4 a guest shader
+  that declares `uniform mat4 netgl_reproject` isn't wrapped and applies
+  it to the line's ends before extruding (celestiary#306), and the lines
+  keep their width and place too. The satellites still move in time only
   when the guest's next frame lands, and the guest's far-side cull of the
   DSN's dishes is the old view's for that frame. `?orbits_reproject=0`
   turns it off, to compare.
