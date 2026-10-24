@@ -2234,7 +2234,8 @@ function orbitLinkLayers() {
 // The linked satellites changed (new ones, or the same ones moved: once a
 // tick, not once a guest frame; src/orbits.js): update the links' layer.
 // deck applies it at its next animation frame, usually the draw that shows
-// the guest frame they came with (src/orbitsRedraws.js).
+// the guest frame they came with, and the adapter folds its own redraw for
+// that frame into it.
 function refreshOrbitLinks() {
   if (!globe || state.view !== 'globe') return;
   const had = refreshOrbitLinks.had;

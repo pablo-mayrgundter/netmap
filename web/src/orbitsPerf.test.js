@@ -27,50 +27,92 @@ test('batches unpack, whatever their shape', () => {
   assert.deepEqual(unpack(c), [c]);
 });
 
-// A transport and a receiver like portal-netgl's: calls, then frame-end.
+// A transport, receiver and adapter like portal-netgl's: calls, then frame-end.
 function fakeLink(perf) {
   const listeners = new Set();
   const frameListeners = new Set();
-  const transport = perf.wrapTransport({ post() {}, onMessage: (l) => (listeners.add(l), () => listeners.delete(l)) }, null);
-  transport.onMessage((msg) => {
+  const transport = perf.wrapTransport({ post() {}, outputOrigin: 'https://g.example', onMessage: (l) => (listeners.add(l), () => listeners.delete(l)) }, null);
+  const receive = (msg) => {
     for (const m of unpack(msg)) if (m?.type === 'netgl:frame-end') for (const f of frameListeners) f();
-  });
+  };
+  transport.onMessage(receive);
   const deck = { props: {}, setProps(p) { Object.assign(this.props, p); }, getViewports: () => [] };
-  perf.attach(deck, { receiver: { onFrame: (l) => (frameListeners.add(l), () => frameListeners.delete(l)) }, stats: {} });
-  return { deliver: (msg) => { for (const l of listeners) l(msg); }, transport };
+  const layer = {
+    stats: { viewsSent: 0, redrawsForced: 2, redrawsFolded: 5 },
+    receiver: { onFrame: (l) => (frameListeners.add(l), () => frameListeners.delete(l)), wire: { version: 2, port: 'open', batches: 1 } },
+    requestGuestFrame() {
+      this.stats.viewsSent += 1;
+      return true;
+    },
+  };
+  perf.attach(deck, layer);
+  return { deliver: (msg) => { for (const l of listeners) l(msg); }, transport, layer, receive };
 }
 
 test('a frame in one message, or a call a message, counts the same calls', () => {
   const calls = [{ name: 'bindBuffer', args: [34962, { __netgl_handle: 1 }] }, { name: 'drawArrays', args: [0, 0, 3] }, { type: 'netgl:frame-end' }];
   const batched = makeOrbitsPerf();
-  fakeLink(batched).deliver({ batch: calls });
+  const b = fakeLink(batched);
+  batched.observe({ data: { type: 'netgl:batch', batch: calls } }); // the window listener, first
+  b.deliver({ type: 'netgl:batch', batch: calls });
   const single = makeOrbitsPerf();
   const link = fakeLink(single);
-  for (const c of calls) link.deliver(c);
+  for (const c of calls) {
+    single.observe({ data: c });
+    link.deliver(c);
+  }
   for (const perf of [batched, single]) {
     assert.equal(perf.frames.length, 1);
     assert.equal(perf.frames[0].calls, 2);
     assert.equal(perf.frames[0].kinds.draw.n, 1);
   }
-  assert.equal(batched.frames[0].deliveries, 1);
-  assert.equal(single.frames[0].deliveries, 3);
-  // No window messages seen: messages per frame are the transport's deliveries.
-  assert.equal(batched.summary().wire, 'transport');
+  assert.equal(batched.frames[0].wireMsgs, 1);
+  assert.equal(single.frames[0].wireMsgs, 3);
   assert.equal(batched.summary().msgsPerFrame.median, 1);
-  assert.equal(batched.summary().deserMsPerFrame, null);
+  assert.equal(batched.summary().wire.version, 2);
+  assert.deepEqual(batched.summary().redraws, { forced: 2, folded: 5, viewsSent: 0, clockRequests: 0 });
 });
 
-test('views and frames line up; anchors are counted apart from frames', () => {
+test('without the wire in sight, messages a frame are the transport’s deliveries', () => {
   const perf = makeOrbitsPerf();
   const link = fakeLink(perf);
-  link.transport.post({ type: 'layer:view', viewId: 7, view: { timeMs: 1 } });
+  link.deliver({ type: 'netgl:batch', batch: [{ name: 'drawArrays', args: [] }, { type: 'netgl:frame-end' }] });
+  assert.equal(perf.summary().msgsPerFrame.median, 1);
+  assert.equal(perf.summary().deserMsPerFrame, null);
+});
+
+test('views come from the adapter’s count; frames take the last one', () => {
+  const perf = makeOrbitsPerf();
+  const link = fakeLink(perf);
+  assert.equal(link.layer.requestGuestFrame(), true); // the clock asks
   link.deliver({ name: 'drawArrays', args: [] });
   link.deliver({ type: 'netgl:frame-end' });
   link.deliver({ type: 'layer:anchors', anchors: [{ id: 'dsn:DSS-43' }] });
   assert.equal(perf.frames.length, 1);
-  assert.equal(perf.frames[0].viewId, 7);
+  assert.equal(perf.frames[0].viewId, 1);
+  assert.equal(perf.views.get(1).by, 'request');
+  assert.equal(perf.summary().redraws.clockRequests, 1);
   assert.equal(perf.anchors.length, 1);
-  assert.equal(perf.anchors[0].n, 1);
+});
+
+test('a port the receiver opens is read like the window', { skip: typeof MessageChannel !== 'function' || !Object.getOwnPropertyDescriptor(globalThis.MessagePort?.prototype ?? {}, 'onmessage')?.set }, async () => {
+  const perf = makeOrbitsPerf();
+  const link = fakeLink(perf);
+  const ch = new MessageChannel(); // as the receiver does, on wire 2
+  const got = new Promise((resolve) => {
+    ch.port1.onmessage = (ev) => {
+      link.receive(ev.data);
+      resolve();
+    };
+  });
+  ch.port2.postMessage({ type: 'netgl:batch', batch: [{ name: 'drawArrays', args: [] }, { type: 'netgl:frame-end' }] });
+  await got;
+  ch.port1.close();
+  perf.detach();
+  assert.equal(perf.frames.length, 1);
+  assert.equal(perf.frames[0].portMsgs, 1);
+  assert.equal(perf.summary().wire.portMsgs, 1);
+  assert.equal(globalThis.MessageChannel.__orbitsPerf, undefined); // put back
 });
 
 test('draws in one animation frame are a burst', () => {
@@ -99,6 +141,6 @@ test('long frames’ scripts are sorted by who ran them', () => {
 test('the guest’s own stats, when it sends them, are in the summary', () => {
   const perf = makeOrbitsPerf();
   assert.equal(perf.summary().guest, null);
-  perf.guestStats({ type: 'layer:stats', renderMs: 4.2, postMs: 1.1 });
+  perf.guestStats({ type: 'layer:stats', frames: 4, updateMs: 0.8, renderMs: 4.2, recordMs: 1.1, anchorsMs: 0.1, calls: 170, messages: 1, bytes: 50000 });
   assert.equal(perf.summary().guest.renderMs, 4.2);
 });

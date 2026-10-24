@@ -21,14 +21,15 @@
 // Times are on one clock, Unix ms (performance.timeOrigin + now), so a
 // guest-side log on the same clock lines up with it.
 //
-// What it hooks is the adapter's, not the wire's, so it survives a change of
-// wire (portal-netgl 0.6.0 sends one message per frame over a MessageChannel
-// port): frames end at the receiver's `onFrame`, calls are counted as the
-// transport delivers them, batched or not, and draws are deck's own. Only
-// two numbers need the wire: messages per frame and their deserialisation,
-// read by a listener on window that runs before the transport's. On another
-// wire, messages per frame are the transport's deliveries and
-// deserialisation shows in the main thread's time by invoker instead.
+// Most of it hooks the adapter, not the wire, so it holds on either wire
+// (portal-netgl 0.6.0's wire 2 sends a frame as one `netgl:batch` over a
+// MessageChannel port; wire 1, one message a call on window): frames end at
+// the receiver's `onFrame`, views are the adapter's count (`viewsSent`, from
+// a draw or `requestGuestFrame`), redraws its `redrawsForced` and
+// `redrawsFolded`, and draws are deck's own. Messages, calls, bytes and
+// their deserialisation are read on the wire: on window by a listener that
+// runs before the transport's, and on wire 2's port by wrapping the
+// `onmessage` of the ports the receiver opens while the probe is on.
 //
 // The corner panel's buttons copy the raw records and a summary as JSON, or
 // save them to a file. Nothing is sent anywhere. Costs a little main-thread
@@ -139,6 +140,31 @@ export function inputToShown(inputs, frames, maxMs = 5000) {
   return out;
 }
 
+// The MessageChannels made while a probe is on hand their port1 to it (the
+// latest probe's): wire 2's receiver listens on that port with `onmessage`.
+let channelHook = null;
+let OrigChannel = null;
+const installChannelHook = () => {
+  if (OrigChannel) return true;
+  const Orig = globalThis.MessageChannel;
+  if (typeof Orig !== 'function') return false;
+  function MessageChannel() {
+    const ch = new Orig();
+    channelHook?.(ch.port1);
+    return ch;
+  }
+  MessageChannel.prototype = Orig.prototype;
+  MessageChannel.__orbitsPerf = true;
+  OrigChannel = Orig;
+  globalThis.MessageChannel = MessageChannel;
+  return true;
+};
+const uninstallChannelHook = () => {
+  channelHook = null;
+  if (OrigChannel && globalThis.MessageChannel?.__orbitsPerf) globalThis.MessageChannel = OrigChannel;
+  OrigChannel = null;
+};
+
 /**
  * @param {object} [o]
  * @param {number} [o.keep] records kept, each kind (a ring)
@@ -160,10 +186,12 @@ export function makeOrbitsPerf({ keep = 600 } = {}) {
   let shown = null; // the guest frame on screen (its record)
   let framesSinceDrain = 0;
   let lastInput = null;
-  let windowMsgs = 0; // wire messages seen on window (0 on another wire)
+  let windowMsgs = 0; // guest frame messages seen on window
+  let portMsgs = 0; // ... and on a MessageChannel port (wire 2)
+  let requests = 0; // views the clock asked for (requestGuestFrame)
+  let adapter = null; // the layer (attachNetGLDeckLayer's handle)
   let framesFromReceiver = false; // frames end at the receiver's onFrame
   let pendingAnchor = null; // an anchors message seen on the wire, not yet handled
-  let hostStats = null;
   let busyType = null;
   const undo = [];
   const push = (arr, x) => {
@@ -183,39 +211,22 @@ export function makeOrbitsPerf({ keep = 600 } = {}) {
     framesSinceDrain += 1;
   };
 
-  // The wire: a listener on window, registered before the transport's, sees
-  // each message first, so reading `data` here is where Chromium
-  // deserialises it. One message may carry a whole frame.
-  const observe = (ev) => {
-    const a = clock();
-    const msg = ev.data;
-    const deser = clock() - a;
-    const items = unpack(msg);
+  // The wire. Window messages: a listener on window, registered before the
+  // transport's, sees each first, so reading `data` here is where Chromium
+  // deserialises it. Port messages (wire 2's MessageChannel, which the
+  // receiver makes and listens on itself): the channels made while the probe
+  // is on get a port1 whose `onmessage` handler is wrapped the same way.
+  // Either may carry one call or a whole frame (`netgl:batch`).
+  const wireMsg = (data, a, deser, via) => {
+    const items = unpack(data);
+    let f = null;
     if (items.some((m) => isCall(m) || isFrameEnd(m))) {
-      windowMsgs += 1;
-      const f = frame(a);
+      if (via === 'port') portMsgs += 1;
+      else windowMsgs += 1;
+      f = frame(a);
       f.wireMsgs += 1;
       f.deserMs += deser;
-    } else if (items.some((m) => m?.type === 'layer:anchors')) {
-      const m = items.find((x) => x?.type === 'layer:anchors');
-      pendingAnchor = { t: a, viewId: m.viewId ?? null, n: Array.isArray(m.anchors) ? m.anchors.length : 0, deserMs: deser, handleMs: null };
-    }
-  };
-  let source = null;
-  const raw = (ev) => {
-    if (source && ev.source !== source) return;
-    observe(ev);
-  };
-
-  // What the transport delivers to the adapter: calls (one by one or
-  // batched), frame ends, anchors, control.
-  const delivered = (msg, run) => {
-    const a = clock();
-    const items = unpack(msg);
-    const netgl = items.some((m) => isCall(m) || isFrameEnd(m));
-    const f = netgl ? frame(a) : null;
-    if (f) {
-      f.deliveries += 1;
+      if (via === 'port') f.portMsgs = (f.portMsgs ?? 0) + 1;
       for (const m of items) {
         if (!isCall(m)) continue;
         f.calls += 1;
@@ -229,47 +240,112 @@ export function makeOrbitsPerf({ keep = 600 } = {}) {
         nn.bytes += b;
       }
     }
-    const t = clock();
-    run();
-    const d = clock() - t;
+    const am = items.find((m) => m?.type === 'layer:anchors');
+    if (am) pendingAnchor = { t: a, via, viewId: am.viewId ?? null, n: Array.isArray(am.anchors) ? am.anchors.length : 0, deserMs: deser, handleMs: null };
+    return { items, f };
+  };
+  const observe = (ev, via = 'window') => {
+    const a = clock();
+    const data = ev.data;
+    return wireMsg(data, a, clock() - a, via);
+  };
+  // What the receiver did with one message: its time, to the frame it was
+  // part of (closed or not by now) or to the anchors it carried.
+  const handled = (items, f, d) => {
     if (f) {
       f.handleMs += d;
       // Without the receiver's onFrame (attach not called), the frame ends here.
       if (!framesFromReceiver && items.some(isFrameEnd) && cur === f) closeFrame(clock());
     }
-    const am = items.find((m) => m?.type === 'layer:anchors');
-    if (am) {
-      const rec = pendingAnchor ?? { t: a, viewId: am.viewId ?? null, n: Array.isArray(am.anchors) ? am.anchors.length : 0, deserMs: null };
+    if (items.some((m) => m?.type === 'layer:anchors')) {
+      const rec = pendingAnchor ?? { t: clock(), via: 'transport', viewId: null, n: 0, deserMs: null };
       pendingAnchor = null;
       rec.handleMs = d;
       push(anchors, rec);
     }
   };
+  let source = null;
+  const raw = (ev) => {
+    if (source && ev.source !== source) return;
+    rawSeen = observe(ev, 'window');
+  };
+  let rawSeen = null;
 
+  const portDesc = typeof MessagePort === 'undefined' ? null : Object.getOwnPropertyDescriptor(MessagePort.prototype, 'onmessage');
+  const instrumentPort = (port) => {
+    if (!portDesc?.set) return;
+    let handler = null;
+    Object.defineProperty(port, 'onmessage', {
+      configurable: true,
+      get: () => handler,
+      set(fn) {
+        handler = fn;
+        portDesc.set.call(
+          port,
+          typeof fn === 'function'
+            ? (ev) => {
+                const { items, f } = observe(ev, 'port');
+                const t = clock();
+                try {
+                  return fn.call(port, ev);
+                } finally {
+                  handled(items, f, clock() - t);
+                }
+              }
+            : fn,
+        );
+      },
+    });
+  };
+  const patchChannels = () => {
+    if (!installChannelHook()) return;
+    channelHook = instrumentPort;
+    undo.push(() => {
+      if (channelHook === instrumentPort) uninstallChannelHook();
+    });
+  };
+
+  /**
+   * Wrap the transport the layer is given (iframeTransport's), and listen
+   * for the guest window's messages and the ports the receiver opens.
+   */
   const wrapTransport = (transport, win) => {
     source = win;
     if (typeof window !== 'undefined') {
       window.addEventListener('message', raw, true);
       undo.push(() => window.removeEventListener('message', raw, true));
     }
+    patchChannels();
     return {
       ...transport,
-      post(msg, transfer) {
-        if (msg?.type === 'layer:view') {
-          const t = clock();
-          transport.post(msg, transfer);
-          lastViewId = msg.viewId;
-          views.set(msg.viewId, { t, postMs: clock() - t, draw: drawing?.i ?? null, cam, timeMs: msg.view?.timeMs });
-          if (views.size > keep) views.delete(views.keys().next().value);
-          if (drawing) drawing.viewSent = msg.viewId;
-          return;
-        }
-        transport.post(msg, transfer);
-      },
       onMessage(listener) {
-        return transport.onMessage((msg) => delivered(msg, () => listener(msg)));
+        return transport.onMessage((msg) => {
+          const seen = rawSeen ?? { items: unpack(msg), f: null };
+          rawSeen = null;
+          const f = seen.f ?? (seen.items.some((m) => isCall(m) || isFrameEnd(m)) ? frame(clock()) : null);
+          if (f) f.deliveries += 1;
+          const t = clock();
+          try {
+            listener(msg);
+          } finally {
+            handled(seen.items, f, clock() - t);
+          }
+        });
       },
     };
+  };
+
+  // Views, from the adapter's own count, whichever way they went (the
+  // window, the port, a draw or requestGuestFrame).
+  let viewsSeen = 0;
+  const noteViews = (layer) => {
+    const n = layer?.stats?.viewsSent ?? 0;
+    if (n === viewsSeen) return;
+    viewsSeen = n;
+    lastViewId = n;
+    views.set(n, { t: clock(), draw: drawing?.i ?? null, cam, timeMs: layer.lastView?.timeMs ?? null, by: drawing ? 'draw' : 'request' });
+    if (views.size > keep) views.delete(views.keys().next().value);
+    if (drawing) drawing.viewSent = n;
   };
 
   /** The guest's own timings (`layer:stats`), if it sends them. */
@@ -282,11 +358,19 @@ export function makeOrbitsPerf({ keep = 600 } = {}) {
    * Hook the deck and the layer (attachNetGLDeckLayer's handle), after attach.
    * @param {object} deck
    * @param {object} layer
-   * @param {object} [o]
-   * @param {() => object} [o.redraws] the host's redraw counters (orbitsRedraws.js), for the snapshot
-   */
-  const attach = (deck, layer, { redraws } = {}) => {
-    hostStats = redraws ?? null;
+     */
+  const attach = (deck, layer) => {
+    adapter = layer;
+    if (typeof layer?.requestGuestFrame === 'function') {
+      const request = layer.requestGuestFrame;
+      layer.requestGuestFrame = (...args) => {
+        const sent = request.apply(layer, args);
+        if (sent) requests += 1;
+        noteViews(layer);
+        return sent;
+      };
+      undo.push(() => (layer.requestGuestFrame = request));
+    }
     if (typeof layer?.receiver?.onFrame === 'function') {
       framesFromReceiver = true;
       undo.push(layer.receiver.onFrame(() => closeFrame(clock())));
@@ -324,6 +408,7 @@ export function makeOrbitsPerf({ keep = 600 } = {}) {
         if (drawing) drawing.cam = cam;
         const pending = framesSinceDrain;
         after?.(ctx);
+        noteViews(layer);
         if (!drawing) return;
         drawing.replayMs = layer?.stats?.lastMs ?? 0;
         if (pending > 0 && layer?.stats) {
@@ -422,9 +507,19 @@ export function makeOrbitsPerf({ keep = 600 } = {}) {
     const moving = draws.filter((d) => d.lagDraws !== null && d.lagDraws > 0);
     const withCam = draws.filter((d) => d.lagDraws !== null);
     const vs = drawsPerVsync(draws);
-    const wire = windowMsgs ? 'window' : 'transport';
+    // Messages counted on the wire (window or port), else the transport's deliveries.
+    const onWire = windowMsgs + portMsgs > 0;
+    const rw = adapter?.receiver?.wire;
+    const ls = adapter?.stats;
     return {
-      wire,
+      wire: {
+        version: rw?.version ?? 1,
+        port: rw?.port ?? 'none',
+        controlOnPort: rw?.controlOnPort ?? false,
+        windowMsgs,
+        portMsgs,
+        batches: rw?.batches ?? null,
+      },
       guestFrames: done.length,
       guestFps: span ? round((done.length - 1) / span) : null,
       deckDraws: draws.length,
@@ -438,10 +533,10 @@ export function makeOrbitsPerf({ keep = 600 } = {}) {
       receiveSpanMs: stat(done.map((f) => f.tEnd - f.tFirst)),
       frameEndToDrawnMs: stat(done.map((f) => f.tDrawn - f.tEnd)),
       viewToDrawnMs: stat(done.map((f) => f.tDrawn - f.tView)),
-      msgsPerFrame: stat(done.map((f) => (wire === 'window' ? f.wireMsgs : f.deliveries))),
+      msgsPerFrame: stat(done.map((f) => (onWire ? f.wireMsgs : f.deliveries))),
       callsPerFrame: stat(done.map((f) => f.calls)),
       bytesPerFrame: stat(done.map((f) => f.bytes)),
-      deserMsPerFrame: wire === 'window' ? stat(done.map((f) => f.deserMs)) : null,
+      deserMsPerFrame: onWire ? stat(done.map((f) => f.deserMs)) : null,
       handleMsPerFrame: stat(done.map((f) => f.handleMs)),
       byKind: Object.fromEntries(Object.entries(kinds).map(([k, v]) => [k, { n: quantile(v.n, 0.5), bytes: quantile(v.bytes, 0.5) }])),
       deckDrawMs: stat(draws.map((d) => d.ms)),
@@ -454,9 +549,12 @@ export function makeOrbitsPerf({ keep = 600 } = {}) {
       inputToShownMs: stat(inputToShown(inputs, done)),
       mainThread: busy(),
       anchors: { n: anchors.length, perMsg: stat(anchors.map((a) => a.n)), deserMs: stat(anchors.map((a) => a.deserMs)), handleMs: stat(anchors.map((a) => a.handleMs)) },
-      redraws: hostStats?.() ?? null,
-      // TODO(celestiary): its layer page sends no `layer:stats` yet (its own
-      // update, render and post times a frame); when it does, they show here.
+      // The adapter's redraws for guest frames: forced, or folded into a draw
+      // deck made meanwhile; and the clock's asks for a frame that sent a view.
+      redraws: ls ? { forced: ls.redrawsForced ?? null, folded: ls.redrawsFolded ?? null, viewsSent: ls.viewsSent, clockRequests: requests } : null,
+      // The guest's own means a frame, about once a second, when it sends
+      // them (`layer:stats`, celestiary#304: updateMs, renderMs, recordMs,
+      // anchorsMs, calls, messages, bytes).
       guest: guest.length ? guest[guest.length - 1] : null,
     };
   };
@@ -548,13 +646,15 @@ export function makeOrbitsPerf({ keep = 600 } = {}) {
         .join(', ') || '–';
     const tick = setInterval(() => {
       const s = summary();
-      const g = s.guest ? Object.entries(s.guest).filter(([k, v]) => k !== 't' && typeof v === 'number').slice(0, 6) : [];
+      const G = ['updateMs', 'renderMs', 'recordMs', 'anchorsMs', 'calls', 'messages', 'bytes'];
+      const g = s.guest ? G.filter((k) => typeof s.guest[k] === 'number').map((k) => [k, s.guest[k]]) : [];
       const mt = s.mainThread;
       text.textContent =
-        `orbits perf (median / p95)   wire: ${s.wire}\n` +
+        `orbits perf (median / p95)   wire ${s.wire.version}${s.wire.port === 'open' ? ', port' : ''}\n` +
         `guest ${s.guestFps ?? '–'} fps   deck draws/guest frame ${s.deckDrawsPerGuestFrame ?? '–'} (rest ${s.deckDrawsPerGuestFrameAtRest ?? '–'}, input ${s.deckDrawsPerGuestFrameWithInput ?? '–'})\n` +
         `draws/animation frame max ${s.drawsPerVsync.max ?? '–'}, bursts (3+) ${s.bursts}\n` +
         `draw reasons ${top(s.drawReasons)}\n` +
+        `adapter redraws forced ${s.redraws?.forced ?? '–'}, folded ${s.redraws?.folded ?? '–'}; clock asks ${s.redraws?.clockRequests ?? '–'}\n` +
         `input→shown ms     ${f(s.inputToShownMs, 0)}\n` +
         `view→drawn ms      ${f(s.viewToDrawnMs, 0)}   lag ms ${f(s.lagMs, 0)}\n` +
         `deck draw ms       ${f(s.deckDrawMs)}  replay ${f(s.replayMs)}\n` +
@@ -562,7 +662,7 @@ export function makeOrbitsPerf({ keep = 600 } = {}) {
         `recv ms/frame deser ${s.deserMsPerFrame ? f(s.deserMsPerFrame) : 'n/a'} + handle ${f(s.handleMsPerFrame)}\n` +
         `main thread busy ${mt.pct == null ? 'n/a' : `≥${mt.pct}%`} (${mt.longFrames} long frames / ${mt.windowS} s)${mt.scriptMsPerS.messages ? `, messages ${mt.scriptMsPerS.messages} ms/s` : ''}\n` +
         `anchors ${s.anchors.n} msgs, recv ${f(s.anchors.deserMs, 0)} + ${f(s.anchors.handleMs, 0)} ms\n` +
-        `guest ${g.length ? g.map(([k, v]) => `${k} ${round(v, 1)}`).join(', ') : '(no layer:stats)'}`;
+        `guest ${g.length ? g.map(([k, v]) => `${k} ${k === 'bytes' ? `${round(v / 1024, 0)}k` : round(v, 1)}`).join(', ') : '(no layer:stats)'}`;
     }, 500);
     return () => {
       clearInterval(tick);
