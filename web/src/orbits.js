@@ -20,7 +20,7 @@
 // the tab is visible. deck renders on demand, so without the tick the
 // satellites would stand still between camera moves.
 
-import { attachNetGLDeckLayer, iframeTransport, mat4InvertRigid, projectToPixels } from '@pablo-mayrgundter/portal-netgl';
+import { attachNetGLDeckLayer, iframeTransport, mat4InvertRigid, projectToPixels } from '@pablo-mayrgundter/portal-netgl/core';
 
 /**
  * How long the guest's page may take to load, then to say hello once it
@@ -134,20 +134,13 @@ export function startOrbits({ deck, device, src, origin, query, tickMs, now = Da
   let linkPickAt = 0;
   let picking = false;
   let pickTries = 0;
-  // The adapter keeps the subscription and re-sends it on each hello. Not
-  // before the guest is up: until the frame has navigated, a post to its
-  // origin is refused (and logged) by the browser.
-  let up = false;
-  const subscribe = () => up && layer.subscribeAnchors([...BASE_SUBSCRIPTION, ...(picking ? ['norad:*'] : linkIds)]);
+  // The adapter keeps the subscription, holds it (and every other control
+  // post) until the guest's first hello, and re-sends it on each hello.
+  const subscribe = () => layer.subscribeAnchors([...BASE_SUBSCRIPTION, ...(picking ? ['norad:*'] : linkIds)]);
 
   // The guest said hello (the adapter acks it) or netgl:ready: it's up, so
   // its data is loading now.
   const connected = () => {
-    if (!up) {
-      up = true;
-      subscribe();
-      if (!active || document.hidden) visibility();
-    }
     cancel(helloTimer);
     if (!readyTimer && stats.status !== 'ready') readyTimer = later(T.ready, () => fail(`celestiary still loading after ${T.ready / 1000} s`));
     if (stats.status === 'connecting') setStatus('loading');
@@ -225,6 +218,7 @@ export function startOrbits({ deck, device, src, origin, query, tickMs, now = Da
       console.warn('[orbits] replay error', err);
     },
   });
+  subscribe();
 
   // Tick while on and visible. The adapter redraws deck when a guest frame
   // arrives; this redraws once a tick so the time moves.
@@ -240,16 +234,17 @@ export function startOrbits({ deck, device, src, origin, query, tickMs, now = Da
   };
   const visibility = () => {
     if (disposed) return;
-    if (up) layer.postToGuest({ type: 'layer:visibility', state: document.hidden || !active ? 'hidden' : 'visible' });
+    layer.postToGuest({ type: 'layer:visibility', state: document.hidden || !active ? 'hidden' : 'visible' });
     run();
   };
   document.addEventListener('visibilitychange', visibility);
-  run();
+  if (document.hidden) visibility();
+  else run();
 
   function dispose() {
     if (disposed) return;
     try {
-      if (up) layer.postToGuest({ type: 'layer:dispose' });
+      layer.postToGuest({ type: 'layer:dispose' });
     } catch {
       /* the frame may be gone */
     }
