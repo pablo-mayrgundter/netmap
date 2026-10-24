@@ -2164,6 +2164,8 @@ function syncOrbits() {
       onFail: (message) => orbitsFailed(message),
       onLinks: () => refreshOrbitLinks(),
       perf: orbitsPerf,
+      // ?orbits_reproject=0: draw the guest's frames for the view they were rendered for (A/B).
+      reproject: params.get('orbits_reproject') !== '0',
     });
     updateOrbitLinkTarget();
     syncOrbitsControls();

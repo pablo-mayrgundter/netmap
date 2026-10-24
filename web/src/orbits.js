@@ -79,8 +79,9 @@ export function lngLatAltToEcef([lng, lat, alt], radius) {
  * @param {(message: string) => void} [o.onFail] the layer gave up (it disposes itself first)
  * @param {() => void} [o.onLinks] the linked Starlink anchors (`links()`) changed: new satellites, or the same ones moved
  * @param {Function} [o.perf] measure the layer and show its panel: orbitsPerf.js's makeOrbitsPerf, loaded only for ?orbits_perf=1
+ * @param {boolean} [o.reproject] compose each guest frame for the globe's current view (default true; ?orbits_reproject=0 turns it off)
  */
-export function startOrbits({ deck, device, src, origin, query, tickMs, now = Date.now, live = true, timeoutMs = 0, onStatus = () => {}, onFail = () => {}, onLinks = () => {}, perf: makePerf = null }) {
+export function startOrbits({ deck, device, src, origin, query, tickMs, now = Date.now, live = true, timeoutMs = 0, onStatus = () => {}, onFail = () => {}, onLinks = () => {}, perf: makePerf = null, reproject = true }) {
   const url = new URL(src);
   url.searchParams.set('host', location.origin);
   url.searchParams.set('nets', query.nets);
@@ -133,7 +134,7 @@ export function startOrbits({ deck, device, src, origin, query, tickMs, now = Da
 
   // Pinned both ways: posts go to `origin` only, and only that window at
   // that origin is heard (portal-netgl 0.5.0 and later).
-  const perf = makePerf ? makePerf() : null;
+  const perf = makePerf ? makePerf({ project: projectToPixels }) : null;
   const pinned = iframeTransport(iframe, { origin, onReject: () => (stats.rejected += 1) });
   const transport = perf ? perf.wrapTransport(pinned, iframe.contentWindow) : pinned;
 
@@ -237,6 +238,16 @@ export function startOrbits({ deck, device, src, origin, query, tickMs, now = Da
     cancel(helloTimer);
     helloTimer = later(T.hello, () => fail(`no answer from ${origin} ${T.hello / 1000} s after it loaded`));
   });
+  // Host reprojection (portal-netgl 0.6.2): a guest frame is rendered for
+  // the view sent, and lands a deck draw or more later; while the camera
+  // moves the globe is already at the next view, and the satellites lagged
+  // it by a frame (`lagDraws` 1, 100 to 150 ms). With `reproject` the
+  // adapter keeps each view it sends, the replay rewrites the guest's vertex
+  // shaders, and each guest draw gets C = VP_now · VP_frame⁻¹ on its
+  // gl_Position: drawn where deck's current view puts it. Points stay their
+  // size; what can't be corrected is in portal-netgl's DESIGN.md, "Host
+  // reprojection".
+  //
   // portal-netgl's adapter folds its redraw for a guest frame into a deck
   // draw that has happened meanwhile (the links' layer update, a camera
   // move): one draw a frame (`layer.stats.redrawsFolded`). Since 0.6.1 only a
@@ -246,6 +257,7 @@ export function startOrbits({ deck, device, src, origin, query, tickMs, now = Da
     device,
     transport,
     time: clock,
+    reproject,
     onReady: (msg) => {
       stats.ready = msg;
       connected();

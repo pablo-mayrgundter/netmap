@@ -147,6 +147,28 @@ export function frameEndToNextAnimationFrame(frames, rafs) {
  * For each input, how long until a deck draw showed a guest frame drawn for
  * a view sent after it (frames in arrival order, so their views' times rise).
  */
+/**
+ * How far a host reprojection moved the guest's content, in drawing-buffer
+ * pixels: the most any of the globe's centre and its six extreme points
+ * (±R on each axis) moved between the view the guest frame was drawn for
+ * and the one it was composed into (`layer.lastReprojection`). 0 for none.
+ * @param {{from: object|null, to: object, correction: number[]|null}|null} r
+ * @param {(view: object, p: number[]) => number[]} project portal-netgl's projectToPixels
+ */
+export function reprojectionShiftPx(r, project) {
+  if (!r?.correction || !r.from || !r.to) return 0;
+  const R = r.to.earth?.radius ?? 6370972;
+  const pts = [[0, 0, 0], [R, 0, 0], [-R, 0, 0], [0, R, 0], [0, -R, 0], [0, 0, R], [0, 0, -R]];
+  let most = 0;
+  for (const p of pts) {
+    const [ax, ay, az] = project(r.from, p);
+    const [bx, by, bz] = project(r.to, p);
+    if (!(az > -1 && az < 1 && bz > -1 && bz < 1)) continue;
+    most = Math.max(most, Math.hypot(bx - ax, by - ay));
+  }
+  return most;
+}
+
 export function inputToShown(inputs, frames, maxMs = 5000) {
   const shown = frames.filter((f) => Number.isFinite(f.tView) && Number.isFinite(f.tDrawn));
   const out = [];
@@ -189,7 +211,7 @@ const uninstallChannelHook = () => {
  * @param {object} [o]
  * @param {number} [o.keep] records kept, each kind (a ring)
  */
-export function makeOrbitsPerf({ keep = 600 } = {}) {
+export function makeOrbitsPerf({ keep = 600, project = null } = {}) {
   const t0 = clock();
   const frames = []; // guest frames
   const draws = []; // deck draws
@@ -402,7 +424,7 @@ export function makeOrbitsPerf({ keep = 600 } = {}) {
     let i = 0;
     if (drawLayers) {
       deck._drawLayers = (reason, opts) => {
-        const d = { i: ++i, t0: clock(), vsync: vsyncNow(), reason: String(reason ?? ''), replay: 'none', replayMs: 0, viewSent: null, cam: null, shownSeq: null, lagDraws: null, lagMs: null, inputAgeMs: null };
+        const d = { i: ++i, t0: clock(), vsync: vsyncNow(), reason: String(reason ?? ''), replay: 'none', replayMs: 0, viewSent: null, cam: null, shownSeq: null, lagDraws: null, lagMs: null, inputAgeMs: null, reproject: null };
         drawing = d;
         try {
           return drawLayers(reason, opts);
@@ -441,6 +463,12 @@ export function makeOrbitsPerf({ keep = 600 } = {}) {
             shown.tDrawn = clock();
           }
         } else if (shown) drawing.replay = 'rerun';
+        // Host reprojection (portal-netgl 0.6.2, `?orbits_reproject`): what
+        // this draw's replay was composed for, when it replayed.
+        const r = layer?.lastReprojection;
+        if (r && r.to === layer.lastView && drawing.replay !== 'none') {
+          drawing.reproject = { viewId: r.viewId, corrected: !!r.correction, shiftPx: project ? round(reprojectionShiftPx(r, project), 1) : null };
+        }
         if (shown) {
           drawing.shownSeq = shown.seq;
           const v = views.get(shown.viewId);
@@ -588,6 +616,10 @@ export function makeOrbitsPerf({ keep = 600 } = {}) {
       staleDraws: withCam.length ? round(moving.length / withCam.length) : null,
       lagDraws: stat(moving.map((d) => d.lagDraws)),
       lagMs: stat(moving.map((d) => d.lagMs)),
+      // Host reprojection: of the draws that showed a frame behind the
+      // camera, the share composed for deck's view, and how far it moved them.
+      reprojected: moving.length ? round(moving.filter((d) => d.reproject?.corrected).length / moving.length) : null,
+      reprojectShiftPx: stat(moving.filter((d) => d.reproject?.corrected).map((d) => d.reproject.shiftPx)),
       inputToDrawMs: stat(draws.filter((d) => d.inputAgeMs !== null && d.inputAgeMs < 1000).map((d) => d.inputAgeMs)),
       inputToShownMs: stat(inputToShown(inputs, done)),
       mainThread: busy(),
@@ -701,6 +733,7 @@ export function makeOrbitsPerf({ keep = 600 } = {}) {
         `adapter redraws forced ${s.redraws?.forced ?? '–'}, folded ${s.redraws?.folded ?? '–'}; clock asks ${s.redraws?.clockRequests ?? '–'}\n` +
         `input→shown ms     ${f(s.inputToShownMs, 0)}\n` +
         `view→drawn ms      ${f(s.viewToDrawnMs, 0)}   lag ms ${f(s.lagMs, 0)}\n` +
+        `reprojected ${s.reprojected == null ? '–' : `${Math.round(s.reprojected * 100)}%`} of lagging draws, moved px ${f(s.reprojectShiftPx, 0)}\n` +
         `animation frame gap ms ${f(s.animationFrameGapMs, 0)}  frame end→next ${f(s.frameEndToNextAnimationFrameMs, 0)}\n` +
         `deck draw ms       ${f(s.deckDrawMs)}  replay ${f(s.replayMs)}\n` +
         `msgs/frame ${f(s.msgsPerFrame, 0)}  calls ${f(s.callsPerFrame, 0)}  kB/frame ${s.bytesPerFrame.median == null ? '–' : round(s.bytesPerFrame.median / 1024, 0)}\n` +

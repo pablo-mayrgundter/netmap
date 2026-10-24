@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { argBytes, callBytes, callKind, drawsPerVsync, frameEndToNextAnimationFrame, inputToShown, invokerKind, makeOrbitsPerf, unpack } from './orbitsPerf.js';
+import { argBytes, callBytes, callKind, drawsPerVsync, frameEndToNextAnimationFrame, inputToShown, invokerKind, makeOrbitsPerf, reprojectionShiftPx, unpack } from './orbitsPerf.js';
 
 test('calls are grouped into the payload table’s families', () => {
   assert.equal(callKind('bufferSubData'), 'buffer');
@@ -149,4 +149,17 @@ test('the guest’s own stats, when it sends them, are in the summary', () => {
   assert.equal(perf.summary().guest, null);
   perf.guestStats({ type: 'layer:stats', frames: 4, updateMs: 0.8, renderMs: 4.2, recordMs: 1.1, anchorsMs: 0.1, calls: 170, messages: 1, bytes: 50000 });
   assert.equal(perf.summary().guest.renderMs, 4.2);
+});
+
+test('a reprojection’s shift is the most the globe’s points moved, and 0 without a correction', () => {
+  // A stand-in projection: x pixels = ECEF x / 1e5 plus the view's pan.
+  const project = (view, p) => [p[0] / 1e5 + view.pan, p[1] / 1e5, 0];
+  const from = { pan: 0, earth: { radius: 6e6 } };
+  const to = { pan: 12, earth: { radius: 6e6 } };
+  assert.equal(reprojectionShiftPx({ from, to, correction: [1] }, project), 12);
+  assert.equal(reprojectionShiftPx({ from, to, correction: null }, project), 0);
+  assert.equal(reprojectionShiftPx(null, project), 0);
+  // Points out of the depth range don't count.
+  const behind = (view, p) => [p[0] / 1e5 + view.pan, 0, 2];
+  assert.equal(reprojectionShiftPx({ from, to, correction: [1] }, behind), 0);
 });
