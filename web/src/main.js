@@ -2091,6 +2091,7 @@ let orbits = null; // the running layer (startOrbits' handle)
 let orbitsKey = ''; // what it was started with
 let orbitsModule = null; // import('./orbits.js'), once asked for
 let orbitsMod = null; // ... and once it's here
+let orbitsPerf = null; // makeOrbitsPerf, with ?orbits_perf=1
 let orbitsStatus = '';
 
 const orbitsWanted = () => state.orbits && orbitsQuery(orbitsWhat()).any;
@@ -2128,7 +2129,12 @@ function syncOrbits() {
   }
   if (state.view !== 'globe' || !globe || !globeDevice || !globeDrawn) return;
   if (!orbitsModule) {
-    orbitsModule = import('./orbits.js').then((mod) => (orbitsMod = mod));
+    // The perf probe (?orbits_perf=1, README "Orbits") is its own chunk.
+    const perf = params.get('orbits_perf') === '1' ? import('./orbitsPerf.js') : null;
+    orbitsModule = Promise.all([import('./orbits.js'), perf]).then(([mod, perfMod]) => {
+      orbitsPerf = perfMod?.makeOrbitsPerf ?? null;
+      return (orbitsMod = mod);
+    });
     orbitsModule.then(() => syncOrbits(), (err) => orbitsFailed(`couldn't load the layer's code (${err.message})`));
     return;
   }
@@ -2156,8 +2162,8 @@ function syncOrbits() {
         syncOrbitsControls();
       },
       onFail: (message) => orbitsFailed(message),
-      onAnchors: () => refreshOrbitLinks(),
-      perf: params.get('orbits_perf') === '1',
+      onLinks: () => refreshOrbitLinks(),
+      perf: orbitsPerf,
     });
     updateOrbitLinkTarget();
     syncOrbitsControls();
@@ -2225,7 +2231,10 @@ function orbitLinkLayers() {
   ];
 }
 
-// New anchors: redraw the links (and only them) if there are any.
+// The linked satellites changed (new ones, or the same ones moved: once a
+// tick, not once a guest frame; src/orbits.js): update the links' layer.
+// deck applies it at its next animation frame, usually the draw that shows
+// the guest frame they came with (src/orbitsRedraws.js).
 function refreshOrbitLinks() {
   if (!globe || state.view !== 'globe') return;
   const had = refreshOrbitLinks.had;
