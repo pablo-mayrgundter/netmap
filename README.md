@@ -185,6 +185,15 @@ side; the protocol is portal's RFC 0001 (globe and orbit layers).
   loading, doesn't finish loading its data in 90 s, or reports an error,
   netmap removes it, shows a notice and turns the control off
   (`?orbits_timeout=<s>` raises the limits on slow machines).
+* **Measuring it.** `?orbits_perf=1` adds a panel in the corner with the
+  layer's costs on your own GPU, from netmap's side (`src/orbitsPerf.js`):
+  guest frames a second and deck draws for each, the time from a view to
+  its guest frame's arrival and to the deck draw that shows it, the
+  messages and bytes a guest frame takes and the main-thread time spent
+  receiving them, the replay's time, and how many deck draws behind the
+  camera the guest content is while it moves. **Copy JSON** copies the
+  raw records (each guest frame, each deck draw, each view) on one clock,
+  Unix ms; nothing is sent anywhere.
 
 **What loads from where.** Only while the control is on: the guest page and
 its scripts (about 230 KB gzipped, mostly three.js) and its data snapshots
