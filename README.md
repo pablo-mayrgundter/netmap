@@ -168,9 +168,19 @@ side's satellites and no pixels are copied. `src/orbits.js` is the host
 side; the protocol is portal's RFC 0001 (globe and orbit layers).
 
 * **The clock.** netmap sends UTC now with every view, rounded to a tick
-  (4 Hz; `?orbits_hz=1..30`), and redraws the globe once a tick while the
-  layer is on and the tab is visible. Off, or on the 2D map, or in a hidden
-  tab, nothing ticks. `?orbits_t=<ISO time>` stops the clock at a moment.
+  (4 Hz; `?orbits_hz=1..30`). Once a tick, while the layer is on and the
+  tab is visible, it asks the guest for a frame at the new time
+  (`requestGuestFrame`, portal-netgl 0.6.0), and deck draws once, when the
+  frame lands. It doesn't ask while a frame waits for its deck draw, so a
+  GPU slower than the tick isn't sent frames it can't show. It used to
+  force a deck redraw each tick, so deck drew twice a tick (the old frame,
+  then the new), and while frames stalled the queued redraws ran in bursts
+  of up to 185 draws. Off, or on the 2D map, or in a hidden tab, nothing
+  ticks. `?orbits_t=<ISO time>` stops the clock at a moment.
+* **One draw a guest frame.** The adapter folds its redraw for a guest
+  frame into a deck draw made meanwhile, and the links' layer is updated
+  only when its endpoints change: once a tick, not once a guest frame
+  (`src/orbitsLinks.js`).
 * **The far plane.** While the layer is on, the globe's far plane is 4×
   deck's default so the geostationary belt (6.6 Earth radii) fits from any
   zoom.
@@ -178,19 +188,74 @@ side; the protocol is portal's RFC 0001 (globe and orbit layers).
   anchors (`dsn:GDSCC`, `dsn:DSS-43`), show in the tooltip.
 * **Across engines.** With Starlink on, faint lines join AS14593 (SpaceX's
   Starlink) to the four Starlink satellites nearest its node, re-picked
-  every minute.
+  every minute. A guest whose hello says it answers "the n anchors nearest
+  this point" (`ext['portal.anchors/1'].near`, proposed in celestiary#304)
+  gets a `{near: {p, n: 4}, pattern: 'norad:*'}` subscription and sends
+  just those four with each frame. With any other guest, each pick
+  subscribes to `norad:*` for one guest frame, so the guest sends every
+  satellite's anchor, about 11.7k and 1 MB, which takes the main thread 80
+  to 120 ms to receive. The pick rides the next view and asks for no draw
+  of its own.
 * **The 2D map** can't host it yet: Web Mercator isn't a 4×4 camera the
   guest can draw with (RFC 0001, open question).
 * **Failure.** If the page doesn't load in 60 s, doesn't answer 20 s after
   loading, doesn't finish loading its data in 90 s, or reports an error,
   netmap removes it, shows a notice and turns the control off
   (`?orbits_timeout=<s>` raises the limits on slow machines).
+* **Measuring it:** `?orbits_perf=1`, below.
 
 **What loads from where.** Only while the control is on: the guest page and
 its scripts (about 230 KB gzipped, mostly three.js) and its data snapshots
 (the CelesTrak catalogue, Starlink, Iridium, the DSN's configuration) from
 celestiary.org, and the DSN Now live feed from `eyes.nasa.gov`, which the
-guest polls. netmap's own code for it is a 20 KB chunk loaded on first use.
+guest polls. netmap's own code for it is a chunk of about 24 KB (10 KB
+gzipped) loaded on first use, and the perf probe another 15 KB, only with
+`?orbits_perf=1`.
+
+**Measuring the Orbits layer on your GPU.** Add `?orbits_perf=1` to the
+URL and turn Orbits on (e.g. `/?orbits_perf=1#view=globe&orbits=1`), and a
+panel in the bottom-left corner shows the
+layer's costs from netmap's side (`src/orbitsPerf.js`), medians and p95s:
+
+* deck draws per guest frame, overall, at rest and in input's wake; the most
+  draws in one animation frame, and how many frames had a burst of 3 or more;
+  what asked for the draws (`drawReasons`);
+* input → shown: from a pointer or key event to the first deck draw showing a
+  guest frame drawn for a view sent after it; and the lag behind the camera,
+  in ms, of what a draw shows (`lagMs`);
+* per guest frame: messages, GL calls, kB, and the main-thread time to
+  receive them, deserialising (`deserMsPerFrame`) and handling;
+* the host's main thread: how busy it is (long animation frames, 50 ms or
+  more, so a lower bound) and which scripts ran in them (messages, animation
+  frames, timers, input);
+* the anchors: how many, and how long they take to receive;
+* the adapter's redraws for guest frames, forced or folded into a draw deck
+  made anyway, and how many views the clock asked for;
+* the guest's own means a frame, if it reports them: netmap sends
+  `layer:stats-subscribe`, and a guest that answers (celestiary#304) sends
+  `layer:stats` about once a second, with `updateMs`, `renderMs`,
+  `recordMs`, `anchorsMs`, `calls`, `messages` and `bytes`.
+
+Most of it hooks the adapter, not the wire: frames end at the receiver's
+`onFrame`, views are the adapter's count, and draws are deck's own. The
+wire's numbers (messages, bytes, deserialisation) are read where the
+messages arrive: on window for wire 1 (a message a call), and on the
+MessageChannel port for wire 2 (a frame as one `netgl:batch`). `wire` says
+which the guest negotiated (`receiver.wire`).
+
+To capture, load the view, wait about ten seconds at rest, then drag the
+globe for ten seconds, then:
+
+* **Copy summary** copies a short JSON (the browser, GPU and the summary)
+  small enough to paste into a GitHub comment;
+* **Copy JSON** copies everything: each guest frame, deck draw, view,
+  input and long frame, on one clock (Unix ms), so a guest-side log lines
+  up. It runs to a few MB;
+* **Save JSON** downloads the same as a file, to attach to an issue (zip it
+  if GitHub refuses `.json`).
+
+`window.__orbitsPerf.snapshot()` returns it from the console. Nothing is sent
+anywhere.
 
 **Where the guest comes from.** Production is
 `https://celestiary.org/layer.html`. A build can change that with

@@ -16,11 +16,14 @@
 //                                    ◄──  layer:anchors (DSN dishes, …)
 //
 // netmap owns the camera and the clock: the view carries UTC "now", rounded
-// to a tick, and a timer redraws deck once a tick while the layer is on and
-// the tab is visible. deck renders on demand, so without the tick the
-// satellites would stand still between camera moves.
+// to a tick, and a timer asks the guest for a frame at the new time once a
+// tick while the layer is on and the tab is visible (the adapter's
+// requestGuestFrame: deck draws once, when the frame lands, not once with
+// the old frame and once with the new). deck renders on demand, so without
+// the tick the satellites would stand still between camera moves.
 
 import { attachNetGLDeckLayer, iframeTransport, mat4InvertRigid, projectToPixels } from '@pablo-mayrgundter/portal-netgl/core';
+import { linksKey, nearPattern, nearest, supportsNearAnchors } from './orbitsLinks.js';
 
 /**
  * How long the guest's page may take to load, then to say hello once it
@@ -35,7 +38,15 @@ export const READY_TIMEOUT_MS = 90_000;
  * nothing until asked.
  */
 export const BASE_SUBSCRIPTION = ['dsn:*'];
-/** Starlink satellites joined to AS14593's node, re-picked this often, ms. */
+/**
+ * Starlink satellites joined to AS14593's node, re-picked this often, ms,
+ * from a guest that can't answer "the n nearest this point" (orbitsLinks.js
+ * supportsNearAnchors). A pick subscribes to `norad:*` for one guest frame:
+ * every satellite's anchor, about 11.7k and 1 MB, 80 to 120 ms to receive on
+ * the main thread. It goes with the next view (a tick or a camera move) and
+ * asks for no draw of its own. A guest that can answer gets a `near`
+ * subscription instead, and sends just those few with every frame.
+ */
 const LINK_REPICK_MS = 60_000;
 
 /** ECEF metres → [lng, lat, alt] on a sphere of `radius` (deck's globe). */
@@ -66,9 +77,10 @@ export function lngLatAltToEcef([lng, lat, alt], radius) {
  * @param {number} [o.timeoutMs] raise every timeout to at least this (slow machines, tests)
  * @param {(status: object) => void} [o.onStatus]
  * @param {(message: string) => void} [o.onFail] the layer gave up (it disposes itself first)
- * @param {() => void} [o.onAnchors] new anchors arrived
+ * @param {() => void} [o.onLinks] the linked Starlink anchors (`links()`) changed: new satellites, or the same ones moved
+ * @param {Function} [o.perf] measure the layer and show its panel: orbitsPerf.js's makeOrbitsPerf, loaded only for ?orbits_perf=1
  */
-export function startOrbits({ deck, device, src, origin, query, tickMs, now = Date.now, live = true, timeoutMs = 0, onStatus = () => {}, onFail = () => {}, onAnchors = () => {} }) {
+export function startOrbits({ deck, device, src, origin, query, tickMs, now = Date.now, live = true, timeoutMs = 0, onStatus = () => {}, onFail = () => {}, onLinks = () => {}, perf: makePerf = null }) {
   const url = new URL(src);
   url.searchParams.set('host', location.origin);
   url.searchParams.set('nets', query.nets);
@@ -120,8 +132,10 @@ export function startOrbits({ deck, device, src, origin, query, tickMs, now = Da
   };
 
   // Pinned both ways: posts go to `origin` only, and only that window at
-  // that origin is heard (portal-netgl 0.5.0).
-  const transport = iframeTransport(iframe, { origin, onReject: () => (stats.rejected += 1) });
+  // that origin is heard (portal-netgl 0.5.0 and later).
+  const perf = makePerf ? makePerf() : null;
+  const pinned = iframeTransport(iframe, { origin, onReject: () => (stats.rejected += 1) });
+  const transport = perf ? perf.wrapTransport(pinned, iframe.contentWindow) : pinned;
 
   // The clock: UTC now, rounded to the tick, so an unchanged camera between
   // ticks sends no new view and deck goes quiet until the next one.
@@ -131,12 +145,31 @@ export function startOrbits({ deck, device, src, origin, query, tickMs, now = Da
   // node (setLinkTarget).
   let linkTarget = null; // { ecef, count }
   let linkIds = [];
+  let linkSet = new Set();
+  let linkKey = '';
   let linkPickAt = 0;
   let picking = false;
   let pickTries = 0;
+  // The guest picks the nearest satellites itself (a `near` subscription).
+  const near = () => !!linkTarget && supportsNearAnchors(layer.hello);
   // The adapter keeps the subscription, holds it (and every other control
   // post) until the guest's first hello, and re-sends it on each hello.
-  const subscribe = () => layer.subscribeAnchors([...BASE_SUBSCRIPTION, ...(picking ? ['norad:*'] : linkIds)]);
+  const subscribe = () =>
+    layer.subscribeAnchors([...BASE_SUBSCRIPTION, ...(near() ? [nearPattern(linkTarget.ecef, linkTarget.count)] : picking ? ['norad:*'] : linkIds)]);
+  const setLinkIds = (ids) => {
+    linkIds = ids;
+    linkSet = new Set(ids);
+  };
+  const links = () => (linkSet.size ? stats.anchors.filter((a) => linkSet.has(a.id)) : []);
+  // Tell netmap only when the lines would change: its update is a deck
+  // layer update, so a draw. While the camera moves the time stays on its
+  // tick and every guest frame's anchors are the same.
+  const linksMaybeChanged = () => {
+    const key = linksKey(links());
+    if (key === linkKey) return;
+    linkKey = key;
+    onLinks();
+  };
 
   // The guest said hello (the adapter acks it) or netgl:ready: it's up, so
   // its data is loading now.
@@ -162,17 +195,22 @@ export function startOrbits({ deck, device, src, origin, query, tickMs, now = Da
     // RFC 0001 §8.1 names the position `p`; #296 published `ecef`.
     const anchors = (Array.isArray(msg.anchors) ? msg.anchors : []).map((a) => (a.p && !a.ecef ? { ...a, ecef: a.p } : a)).filter((a) => Array.isArray(a.ecef));
     const starlink = picking && linkTarget ? anchors.filter((a) => a.kind === 'starlink') : [];
-    // A frame drawn before the guest saw the subscription has none: wait a
-    // few frames for one that does.
-    if (picking && linkTarget && (starlink.length || ++pickTries > 8)) {
+    if (near()) {
+      // The guest sent the nearest few: they are the links.
+      stats.anchors = anchors;
+      setLinkIds(anchors.filter((a) => a.id.startsWith('norad:')).map((a) => a.id));
+    } else if (picking && linkTarget && (starlink.length || ++pickTries > 8)) {
+      // (A frame drawn before the guest saw the subscription has none: wait
+      // a few frames for one that does.)
       picking = false;
       pickTries = 0;
-      linkIds = nearest(starlink, linkTarget.ecef, linkTarget.count).map((a) => a.id);
+      setLinkIds(nearest(starlink, linkTarget.ecef, linkTarget.count).map((a) => a.id));
       linkPickAt = performance.now();
       subscribe();
-      stats.anchors = anchors.filter((a) => !a.id.startsWith('norad:') || linkIds.includes(a.id));
+      stats.anchors = anchors.filter((a) => !a.id.startsWith('norad:') || linkSet.has(a.id));
     } else if (picking) {
-      stats.anchors = anchors.filter((a) => !a.id.startsWith('norad:'));
+      // Keep the current links while the pick waits for its frame.
+      stats.anchors = anchors.filter((a) => !a.id.startsWith('norad:') || linkSet.has(a.id));
     } else {
       stats.anchors = anchors;
       if (linkTarget && performance.now() - linkPickAt > LINK_REPICK_MS) {
@@ -181,7 +219,7 @@ export function startOrbits({ deck, device, src, origin, query, tickMs, now = Da
       }
     }
     stats.anchorsAt = msg.timeMs;
-    onAnchors();
+    linksMaybeChanged();
   };
 
   let readyTimer = null;
@@ -199,6 +237,9 @@ export function startOrbits({ deck, device, src, origin, query, tickMs, now = Da
     cancel(helloTimer);
     helloTimer = later(T.hello, () => fail(`no answer from ${origin} ${T.hello / 1000} s after it loaded`));
   });
+  // portal-netgl 0.6.0's adapter folds its redraw for a guest frame into a
+  // deck draw that has happened meanwhile (the links' layer update, a camera
+  // move): one draw a frame (`layer.stats.redrawsFolded`).
   const layer = attachNetGLDeckLayer(deck, {
     device,
     transport,
@@ -210,20 +251,42 @@ export function startOrbits({ deck, device, src, origin, query, tickMs, now = Da
     onHello: (msg) => {
       stats.hello = msg;
       connected();
+      // Now we know whether it answers `near` subscriptions.
+      if (near()) subscribe();
+      // The guest's own timings, about once a second (celestiary#304), for the probe.
+      if (perf) layer.postToGuest({ type: 'layer:stats-subscribe', intervalMs: 1000 });
     },
     onAnchors: anchorsArrived,
-    onControl,
+    onControl: (msg) => {
+      if (msg?.type === 'layer:stats') perf?.guestStats(msg);
+      onControl(msg);
+    },
     onError: (err) => {
       stats.replayErrors += 1;
       console.warn('[orbits] replay error', err);
     },
   });
   subscribe();
+  let stopHud = null;
+  if (perf) {
+    perf.attach(deck, layer);
+    stopHud = perf.hud(device.gl);
+    window.__orbitsPerf = Object.assign(perf, { deck, layer });
+  }
 
-  // Tick while on and visible. The adapter redraws deck when a guest frame
-  // arrives; this redraws once a tick so the time moves.
+  // Tick while on and visible: ask the guest for a frame at the new time.
+  // The adapter sends nothing while a view is in flight (the frame it brings
+  // redraws deck, and that draw sends the new time) or when the time hasn't
+  // moved, and redraws deck once, when the frame lands. Ticks that pile up
+  // while frames stall queue nothing.
+  // And not while a frame waits for its draw: on a GPU slower than the tick
+  // (SwiftShader drew 2 frames a second), asking anyway had the guest render,
+  // and netmap receive, twice the frames deck could show.
+  let arrivedAt = -1; // deck's draw count when the last guest frame arrived
+  const stopFrames = layer.receiver?.onFrame(() => (arrivedAt = layer.stats.hostFrames));
+  const waiting = () => arrivedAt === layer.stats.hostFrames;
   let ticker = null;
-  const tick = () => requestAnimationFrame(() => !disposed && active && deck.redraw('orbits clock'));
+  const tick = () => !disposed && active && !waiting() && layer.requestGuestFrame();
   const run = () => {
     const want = live && active && !disposed && !document.hidden;
     if (want && !ticker) ticker = setInterval(tick, tickMs);
@@ -253,7 +316,10 @@ export function startOrbits({ deck, device, src, origin, query, tickMs, now = Da
     timers.clear();
     if (ticker) clearInterval(ticker);
     document.removeEventListener('visibilitychange', visibility);
+    stopFrames?.();
     layer.detach();
+    stopHud?.();
+    perf?.detach(deck);
     iframe.remove();
     deck.redraw('orbits off');
   }
@@ -262,6 +328,7 @@ export function startOrbits({ deck, device, src, origin, query, tickMs, now = Da
     layer,
     iframe,
     stats,
+    perf,
     /** Pause (the 2D map) or resume (the globe) without reloading the guest. */
     setActive(on) {
       if (disposed || on === active) return;
@@ -272,20 +339,19 @@ export function startOrbits({ deck, device, src, origin, query, tickMs, now = Da
     /** Join this many Starlink satellites, the nearest, to a point (ECEF m), or null. */
     setLinkTarget(target) {
       const had = !!linkTarget;
+      const moved = had && target && (target.count !== linkTarget.count || target.ecef.some((x, i) => x !== linkTarget.ecef[i]));
       linkTarget = target;
       if (!target) {
-        linkIds = [];
+        setLinkIds([]);
         picking = false;
         if (had) subscribe();
       } else if (!had) {
-        picking = true;
+        picking = !near();
         subscribe();
-      }
+      } else if (moved && near()) subscribe();
     },
     /** The linked Starlink anchors, in the last frame. */
-    links() {
-      return linkIds.length ? stats.anchors.filter((a) => linkIds.includes(a.id)) : [];
-    },
+    links,
     /** The globe's sphere radius, m (deck's, from the last view). */
     earthRadius() {
       return layer.lastView?.earth?.radius ?? 6370972;
@@ -321,16 +387,6 @@ export function startOrbits({ deck, device, src, origin, query, tickMs, now = Da
       return disposed;
     },
   };
-}
-
-/** The `count` anchors nearest `p` (ECEF m). */
-function nearest(anchors, p, count) {
-  const d = (a) => Math.hypot(a.ecef[0] - p[0], a.ecef[1] - p[1], a.ecef[2] - p[2]);
-  return anchors
-    .map((a) => [d(a), a])
-    .sort((u, v) => u[0] - v[0])
-    .slice(0, count)
-    .map(([, a]) => a);
 }
 
 /**
