@@ -181,6 +181,17 @@ side; the protocol is portal's RFC 0001 (globe and orbit layers).
   frame into a deck draw made meanwhile, and the links' layer is updated
   only when its endpoints change: once a tick, not once a guest frame
   (`src/orbitsLinks.js`).
+* **No lag behind the camera.** A guest frame is rendered for the view
+  netmap sent and lands a draw or more later, so while you pan or zoom the
+  globe was at the new view and the satellites a frame behind it (the
+  probe's `lagDraws` 1, `lagMs` 100 to 150 ms). portal-netgl's host
+  reprojection (0.6.3, `reproject` on the adapter) now composes each guest
+  frame for the globe's current view: the replay rewrites the guest's
+  vertex shaders and corrects each `gl_Position` by C = VP_now · VP_frame⁻¹,
+  exact for positions (and depth). The satellites still move in time only
+  when the guest's next frame lands, and the guest's far-side cull of the
+  DSN's dishes is the old view's for that frame. `?orbits_reproject=0`
+  turns it off, to compare.
 * **The far plane.** While the layer is on, the globe's far plane is 4×
   deck's default so the geostationary belt (6.6 Earth radii) fits from any
   zoom.
@@ -231,6 +242,10 @@ layer's costs from netmap's side (`src/orbitsPerf.js`), medians and p95s:
 * the anchors: how many, and how long they take to receive;
 * the adapter's redraws for guest frames, forced or folded into a draw deck
   made anyway, and how many views the clock asked for;
+* host reprojection: of the draws that showed a guest frame behind the
+  camera, the share composed for deck's view (`reprojected`), and how far
+  the correction moved the guest's content, in pixels (`reprojectShiftPx`;
+  each draw's `reproject` in the full JSON has its frame's `viewId`);
 * the browser's animation frames: the gaps between them
   (`animationFrameGapMs`), and from a guest frame's end to the next one
   (`frameEndToNextAnimationFrameMs`). When a guest frame waits for its draw
