@@ -237,9 +237,11 @@ export function startOrbits({ deck, device, src, origin, query, tickMs, now = Da
     cancel(helloTimer);
     helloTimer = later(T.hello, () => fail(`no answer from ${origin} ${T.hello / 1000} s after it loaded`));
   });
-  // portal-netgl 0.6.0's adapter folds its redraw for a guest frame into a
-  // deck draw that has happened meanwhile (the links' layer update, a camera
-  // move): one draw a frame (`layer.stats.redrawsFolded`).
+  // portal-netgl's adapter folds its redraw for a guest frame into a deck
+  // draw that has happened meanwhile (the links' layer update, a camera
+  // move): one draw a frame (`layer.stats.redrawsFolded`). Since 0.6.1 only a
+  // draw after the frame landed folds it: a frame that lands after a draw,
+  // with an earlier redraw still queued, gets its own.
   const layer = attachNetGLDeckLayer(deck, {
     device,
     transport,
