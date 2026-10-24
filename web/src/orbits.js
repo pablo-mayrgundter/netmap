@@ -279,8 +279,14 @@ export function startOrbits({ deck, device, src, origin, query, tickMs, now = Da
   // redraws deck, and that draw sends the new time) or when the time hasn't
   // moved, and redraws deck once, when the frame lands. Ticks that pile up
   // while frames stall queue nothing.
+  // And not while a frame waits for its draw: on a GPU slower than the tick
+  // (SwiftShader drew 2 frames a second), asking anyway had the guest render,
+  // and netmap receive, twice the frames deck could show.
+  let arrivedAt = -1; // deck's draw count when the last guest frame arrived
+  const stopFrames = layer.receiver?.onFrame(() => (arrivedAt = layer.stats.hostFrames));
+  const waiting = () => arrivedAt === layer.stats.hostFrames;
   let ticker = null;
-  const tick = () => !disposed && active && layer.requestGuestFrame();
+  const tick = () => !disposed && active && !waiting() && layer.requestGuestFrame();
   const run = () => {
     const want = live && active && !disposed && !document.hidden;
     if (want && !ticker) ticker = setInterval(tick, tickMs);
@@ -310,6 +316,7 @@ export function startOrbits({ deck, device, src, origin, query, tickMs, now = Da
     timers.clear();
     if (ticker) clearInterval(ticker);
     document.removeEventListener('visibilitychange', visibility);
+    stopFrames?.();
     layer.detach();
     stopHud?.();
     perf?.detach(deck);

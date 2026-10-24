@@ -171,11 +171,12 @@ side; the protocol is portal's RFC 0001 (globe and orbit layers).
   (4 Hz; `?orbits_hz=1..30`). Once a tick, while the layer is on and the
   tab is visible, it asks the guest for a frame at the new time
   (`requestGuestFrame`, portal-netgl 0.6.0), and deck draws once, when the
-  frame lands. It used to force a deck redraw each tick, so deck drew twice
-  a tick (the old frame, then the new), and while frames stalled the queued
-  redraws ran in bursts of up to 164 draws. Off, or on the 2D map, or in a
-  hidden tab, nothing ticks. `?orbits_t=<ISO time>` stops the clock at a
-  moment.
+  frame lands. It doesn't ask while a frame waits for its deck draw, so a
+  GPU slower than the tick isn't sent frames it can't show. It used to
+  force a deck redraw each tick, so deck drew twice a tick (the old frame,
+  then the new), and while frames stalled the queued redraws ran in bursts
+  of up to 185 draws. Off, or on the 2D map, or in a hidden tab, nothing
+  ticks. `?orbits_t=<ISO time>` stops the clock at a moment.
 * **One draw a guest frame.** The adapter folds its redraw for a guest
   frame into a deck draw made meanwhile, and the links' layer is updated
   only when its endpoints change: once a tick, not once a guest frame

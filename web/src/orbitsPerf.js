@@ -113,6 +113,7 @@ const quantile = (xs, q) => {
   return v[Math.min(v.length - 1, Math.floor(q * v.length))];
 };
 const stat = (xs) => ({ n: xs.filter(Number.isFinite).length, median: quantile(xs, 0.5), p95: quantile(xs, 0.95), max: quantile(xs, 1) });
+const diff = (a, b) => (a == null || b == null ? NaN : a - b);
 const round = (x, d = 2) => (Number.isFinite(x) ? Math.round(x * 10 ** d) / 10 ** d : x);
 const roundStats = (o) => JSON.parse(JSON.stringify(o, (k, v) => (typeof v === 'number' ? round(v) : v)));
 
@@ -507,6 +508,7 @@ export function makeOrbitsPerf({ keep = 600 } = {}) {
     const moving = draws.filter((d) => d.lagDraws !== null && d.lagDraws > 0);
     const withCam = draws.filter((d) => d.lagDraws !== null);
     const vs = drawsPerVsync(draws);
+    const shownFrames = done.filter((f) => f.tDrawn != null);
     // Messages counted on the wire (window or port), else the transport's deliveries.
     const onWire = windowMsgs + portMsgs > 0;
     const rw = adapter?.receiver?.wire;
@@ -529,10 +531,12 @@ export function makeOrbitsPerf({ keep = 600 } = {}) {
       drawsPerVsync: stat(vs),
       bursts: vs.filter((n) => n >= 3).length,
       drawReasons: draws.reduce((m, d) => ((m[d.reason] = (m[d.reason] ?? 0) + 1), m), {}),
-      viewToFrameEndMs: stat(done.map((f) => f.tEnd - f.tView)),
+      viewToFrameEndMs: stat(done.map((f) => diff(f.tEnd, f.tView))),
       receiveSpanMs: stat(done.map((f) => f.tEnd - f.tFirst)),
-      frameEndToDrawnMs: stat(done.map((f) => f.tDrawn - f.tEnd)),
-      viewToDrawnMs: stat(done.map((f) => f.tDrawn - f.tView)),
+      frameEndToDrawnMs: stat(shownFrames.map((f) => diff(f.tDrawn, f.tEnd))),
+      viewToDrawnMs: stat(shownFrames.map((f) => diff(f.tDrawn, f.tView))),
+      // Frames replaced by a later one before a deck draw showed them.
+      framesNotShown: done.length - shownFrames.length,
       msgsPerFrame: stat(done.map((f) => (onWire ? f.wireMsgs : f.deliveries))),
       callsPerFrame: stat(done.map((f) => f.calls)),
       bytesPerFrame: stat(done.map((f) => f.bytes)),
@@ -652,7 +656,7 @@ export function makeOrbitsPerf({ keep = 600 } = {}) {
       text.textContent =
         `orbits perf (median / p95)   wire ${s.wire.version}${s.wire.port === 'open' ? ', port' : ''}\n` +
         `guest ${s.guestFps ?? '–'} fps   deck draws/guest frame ${s.deckDrawsPerGuestFrame ?? '–'} (rest ${s.deckDrawsPerGuestFrameAtRest ?? '–'}, input ${s.deckDrawsPerGuestFrameWithInput ?? '–'})\n` +
-        `draws/animation frame max ${s.drawsPerVsync.max ?? '–'}, bursts (3+) ${s.bursts}\n` +
+        `draws/animation frame max ${s.drawsPerVsync.max ?? '–'}, bursts (3+) ${s.bursts}, guest frames not shown ${s.framesNotShown}\n` +
         `draw reasons ${top(s.drawReasons)}\n` +
         `adapter redraws forced ${s.redraws?.forced ?? '–'}, folded ${s.redraws?.folded ?? '–'}; clock asks ${s.redraws?.clockRequests ?? '–'}\n` +
         `input→shown ms     ${f(s.inputToShownMs, 0)}\n` +
