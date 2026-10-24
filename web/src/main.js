@@ -209,6 +209,7 @@ function ensureGlobe() {
     onClick: onClick,
     onViewStateChange: ({ viewState }) => {
       globeCam = viewState;
+      moving();
       writeHashSoon();
       if (Math.abs(viewState.zoom - globeZoom) > 0.05) {
         globeZoom = viewState.zoom;
@@ -219,6 +220,24 @@ function ensureGlobe() {
     controller: { doubleClickZoom: false }, // double-click picks a node (see wireControls)
   });
   return globe;
+}
+
+// ?movedpr=1: draw the globe at this device-pixel ratio (at most) while the
+// camera moves, and at the screen's again once it has been still for
+// MOVE_SETTLE_MS. Fewer pixels to fill per frame while zooming, at the cost
+// of a softer picture until it settles; the picture at rest is unchanged.
+const MOVE_DPR = Number(params.get('movedpr')) || 0;
+const MOVE_SETTLE_MS = 180;
+let movingTimer = 0;
+function moving() {
+  if (!MOVE_DPR || !globe || devicePixelRatio <= MOVE_DPR) return;
+  if (!movingTimer) globe.setProps({ useDevicePixels: MOVE_DPR });
+  clearTimeout(movingTimer);
+  movingTimer = setTimeout(() => {
+    movingTimer = 0;
+    globe.setProps({ useDevicePixels: true });
+    globe.redraw('settled');
+  }, MOVE_SETTLE_MS);
 }
 
 function baseStyle() {
@@ -795,17 +814,33 @@ function networkLayers(globeView) {
 
   if (showVectors) {
     if (globeView) {
-      const data = cachedArcs(`edges|${trig}`, G.e, (k, a, b) => (endPos(k, 0, a), endPos(k, 1, b)), 0.03);
+      // Only the links the toggles show (and no fiber hides) get arcs. The GPU
+      // filter culls a link only after its vertex shader has run, and
+      // PathLayer's projects three points per vertex, so hidden links cost as
+      // much per frame as shown ones: every redraw while zooming paid for all
+      // 657k (4.8M path segments, 57M vertices) when backbone-only with fibers
+      // shows 0.29M segments. The toggles and the fiber cell rebuild the arcs;
+      // the sampling and core sliders stay on the GPU filter, so they stay
+      // instant.
+      const shown = memo(`edges-shown|${colourTrig}`, () => {
+        const out = new Uint32Array(G.e);
+        let n = 0;
+        for (let k = 0; k < G.e; k++) if (edgeVisible(k) && !(hidden && hidden[k])) out[n++] = k;
+        return out.slice(0, n);
+      });
+      const data = cachedArcs(`edges|${trig}|${colourTrig}`, shown.length, (j, a, b) => (endPos(shown[j], 0, a), endPos(shown[j], 1, b)), 0.03);
+      const at = { index: 0, target: null };
+      const via = (f) => (d, { index, target }) => ((at.index = shown[index]), (at.target = target), f(d, at));
       layers.push(
         new PathLayer({
           id: 'edges',
           data,
           _pathType: 'open',
-          getColor: getEdgeColor,
+          getColor: via(getEdgeColor),
           opacity,
           visible: opacity > 0,
           extensions: [edgeFilter],
-          getFilterValue: edgeFilterValue,
+          getFilterValue: via(edgeFilterValue),
           filterRange: [[0, sampleK()], [1, 1], coreRange()],
           getWidth: 1,
           widthUnits: 'pixels',
