@@ -75,7 +75,8 @@ const ALT_MAX_M = 700_000;
 
 // --- state ---------------------------------------------------------------
 
-const hash = new URLSearchParams(location.hash.slice(1));
+// The URL's hash: read on load, and again when it's edited (applyHash).
+let hash = new URLSearchParams(location.hash.slice(1));
 
 // Every UI parameter: state field, URL key, type, default. Permalinks carry
 // all of them (plus dataset, camera and selection), so a link reproduces the
@@ -1856,7 +1857,7 @@ function syncControls() {
   syncOrbitsControls();
 }
 
-function writeHash() {
+function hashParams() {
   const h = new URLSearchParams();
   if (G) h.set('data', G.id);
   for (const [field, key, type] of PARAMS) {
@@ -1887,13 +1888,77 @@ function writeHash() {
     h.set('sel', G.asn[state.explore]); // the node being explored
     if (G.meta.kind === 'routers') h.set('selpop', state.explore);
   }
-  history.replaceState(null, '', `#${h}`);
+  return h;
+}
+
+function writeHash() {
+  history.replaceState(null, '', `#${hashParams()}`);
 }
 
 let hashTimer = null;
 function writeHashSoon() {
   clearTimeout(hashTimer);
   hashTimer = setTimeout(writeHash, 250);
+}
+
+function clearRoute() {
+  state.waypoints = [];
+  state.active = 0;
+  state.selected = null;
+  state.explore = null;
+  traceResult = null;
+  pathEdges = [];
+  routes = [];
+  syncRows();
+  $('infoCards').innerHTML = '';
+  layoutCards();
+}
+
+// An edit to the hash (typed, pasted, or back and forward) applies without a
+// reload. writeHash's replaceState fires no hashchange, so this sees only
+// edits from outside. Each part applies only if it differs from the view's
+// own permalink: a changed slider leaves the camera and the route alone.
+function applyHash() {
+  const h = new URLSearchParams(location.hash.slice(1));
+  const now = hashParams();
+  const differs = (keys) => keys.some((k) => h.get(k) !== now.get(k));
+  hash = h;
+  const prev = { ...state };
+  for (const p of PARAMS) state[p[0]] = readParam(p);
+  if (!h.has('layout') && h.has('mode')) state.morph = { cyber: 0, hybrid: 0.5, geo: 1 }[h.get('mode')] ?? 1;
+  state.mode = modeOf(state.morph);
+  if (state.basemap !== prev.basemap) {
+    map.setStyle(baseStyle());
+    map.once('styledata', () => updateRaster());
+  } else if (state.mode !== prev.mode || state.renderer !== prev.renderer || state.backboneOnly !== prev.backboneOnly) {
+    updateRaster();
+  }
+  if (differs(['lon', 'lat', 'z', 'pitch', 'bearing']) || state.view !== prev.view) {
+    const lon = Number(h.get('lon') ?? 10);
+    const lat = Number(h.get('lat') ?? 25);
+    const z = Number(h.get('z') ?? 1.6);
+    if (state.view === 'globe') {
+      globeZoom = Math.max(z - 0.6, 0);
+      ensureGlobe().setProps({ initialViewState: (globeCam = { longitude: lon, latitude: lat, zoom: globeZoom }) });
+    } else {
+      map.jumpTo({ center: [lon, lat], zoom: z, pitch: Number(h.get('pitch') ?? 0), bearing: Number(h.get('bearing') ?? 0) });
+    }
+  }
+  const data = h.get('data');
+  if (data && G && data !== G.id && [...$('dataset').options].some((o) => o.value === data)) {
+    state.dataset = $('dataset').value = data;
+    clearRoute();
+    applyControls();
+    load(data); // which applies the hash's route
+    return;
+  }
+  if (G && differs(['as', 'pop', 'at', 'open', 'sel', 'selpop'])) {
+    clearRoute();
+    applySelection();
+  }
+  applyControls();
+  layoutCards();
+  render();
 }
 
 // Push state into every control (on load, and whenever state changes in code).
@@ -1967,18 +2032,10 @@ function wireControls() {
   $('infoMin').addEventListener('click', () => setCard('detailsOpen', false));
   $('infoFab').addEventListener('click', () => setCard('detailsOpen', true));
   window.addEventListener('resize', () => layoutCards());
+  window.addEventListener('hashchange', applyHash);
   $('dataset').addEventListener('change', (e) => {
     state.dataset = e.target.value;
-    state.waypoints = [];
-    state.active = 0;
-    state.selected = null;
-    state.explore = null;
-    traceResult = null;
-    pathEdges = [];
-    routes = [];
-    syncRows();
-    $('infoCards').innerHTML = '';
-    layoutCards();
+    clearRoute();
     load(state.dataset);
   });
   map.on('moveend', writeHashSoon); // flight keys move every frame
@@ -2330,7 +2387,12 @@ async function load(id) {
   updateRaster();
   render();
 
-  // waypoints from the permalink: as=A,B,… (and pop=… on router maps)
+  applySelection();
+}
+
+// The permalink's waypoints, as=A,B,… (and pop=… on router maps), and the
+// node being explored, sel= (and selpop=).
+function applySelection() {
   const asns = (hash.get('as') || '').split(',').filter(Boolean).map(Number);
   const pops = (hash.get('pop') || '').split(',').map(Number);
   const nodes = asns
