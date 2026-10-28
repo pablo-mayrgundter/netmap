@@ -13,6 +13,7 @@ import { route } from './route.js';
 import { parseTrace, loadLookups, resolveTrace, ipText } from './trace.js';
 import { orbitsQuery, resolveOrbitsSrc } from './orbitsConfig.js';
 import { hashChanges } from './hashParts.js';
+import { nextLineSet, shownLinks } from './lineSet.js';
 
 // Material Icons (Apache-2.0), the same glyphs as MUI's icons, inlined as SVG.
 import hubIcon from '@material-design-icons/svg/filled/hub.svg?raw';
@@ -939,6 +940,45 @@ function edgeVisible(k) {
 const edgeFilter = new DataFilterExtension({ filterSize: 3 });
 
 const TRANSITION = { duration: 1400, easing: (t) => t * t * (3 - 2 * t) };
+const MOVE = { getSourcePosition: TRANSITION, getTargetPosition: TRANSITION };
+// A new line layer's first positions, as a 1 ms transition: its transitions
+// then start the first layout move from where its lines are. With none, or a
+// 0 ms one, they keep no from-state and that move would jump; a 1.4 s one
+// would redraw the map for 1.4 s with nothing moving.
+const SETTLE = { getSourcePosition: { duration: 1 }, getTargetPosition: { duration: 1 } };
+
+// The links the toggles show and no fiber hides, ascending; memoised on the
+// toggles and the fiber cell (colourTrig).
+const shownEdges = (hidden, colourTrig) =>
+  memo(`edges-shown|${colourTrig}`, () => shownLinks(G.e, (k) => edgeVisible(k) && !(hidden && hidden[k])));
+
+// The 2D map's link lines (src/lineSet.js): the shown links, kept in place
+// while the layout moves, and rebuilt once it has.
+let edgeLineSet = null;
+let edgeLineTimer = 0;
+const edgeLineId = (s) => (s.gen ? `edges-${s.gen}` : 'edges');
+const mapLayer = (id) => overlay._deck?.layerManager?.getLayers().find((l) => l.id === id);
+function edgeLines(hidden, colourTrig, trig) {
+  const prev = edgeLineSet;
+  const layer = prev && mapLayer(edgeLineId(prev));
+  const now = performance.now();
+  const s = (edgeLineSet = nextLineSet(prev, shownEdges(hidden, colourTrig), {
+    trig,
+    sec: layoutSec(),
+    owner: G,
+    live: !!layer,
+    applied: layer?.props.data === prev?.data,
+    now,
+    moveMs: TRANSITION.duration + 500,
+    count: G.e,
+  }));
+  if (s.held) renderSoon(); // until deck has the links at the old layout
+  if (s.until > now && s.until !== prev?.until) {
+    clearTimeout(edgeLineTimer);
+    edgeLineTimer = setTimeout(renderSoon, s.until - now + 20);
+  }
+  return s;
+}
 
 const showVectorsFor = (globeView) => state.renderer === 'vector' || globeView;
 
@@ -959,15 +999,12 @@ function networkLayers(globeView) {
     target[3] = edgeVisible(index) && !(hidden && hidden[index]) ? edgeColor[o + 3] * lf[index] * (hidden ? 0.5 : 1) : 0;
     return target;
   };
-  const edgeData = memo('edges', () => ({ length: G.e }));
   const edgeFilterValue = (_, { index, target }) => {
     target[0] = G.edge_rank ? G.edge_rank[index] : 0;
     target[1] = edgeVisible(index) && !(hidden && hidden[index]) ? 1 : 0; // fiber members too
     target[2] = G.edgeCore[index];
     return target;
   };
-  const src = (_, { index, target }) => endPos(index, 0, target);
-  const dst = (_, { index, target }) => endPos(index, 1, target);
   const layers = [];
   const showVectors = state.renderer === 'vector' || globeView;
 
@@ -981,12 +1018,7 @@ function networkLayers(globeView) {
       // shows 0.29M segments. The toggles and the fiber cell rebuild the arcs
       // (edgeArcChunks: a big set in a worker, in chunks); the sampling and
       // core sliders stay on the GPU filter, so they stay instant.
-      const shown = memo(`edges-shown|${colourTrig}`, () => {
-        const out = new Uint32Array(G.e);
-        let n = 0;
-        for (let k = 0; k < G.e; k++) if (edgeVisible(k) && !(hidden && hidden[k])) out[n++] = k;
-        return out.slice(0, n);
-      });
+      const shown = shownEdges(hidden, colourTrig);
       const at = { index: 0, target: null };
       const via = (list, from, f) => (d, { index, target }) => ((at.index = list[from + index]), (at.target = target), f(d, at));
       for (const { set, chunk, visible } of edgeArcChunks(`edges|${trig}|${colourTrig}`, shown, colourTrig)) {
@@ -1011,23 +1043,33 @@ function networkLayers(globeView) {
         );
       }
     } else {
+      // Lines for the shown links only, as the globe's arcs: the GPU filter
+      // culls a link after its vertex shader has run, so every redraw while
+      // zooming paid for all 657k links (2.6M vertices) when the default view
+      // shows 61k. The toggles and the fiber cell rebuild the lines; sampling
+      // and core stay on the GPU filter.
+      const lines = edgeLines(hidden, colourTrig, trig);
+      const { ids, sec } = lines;
+      const id = edgeLineId(lines);
+      const at = { index: 0, target: null };
+      const via = (f) => (d, { index, target }) => ((at.index = ids[index]), (at.target = target), f(d, at));
       layers.push(
         new LineLayer({
-          id: 'edges',
-          data: edgeData,
-          getSourcePosition: src,
-          getTargetPosition: dst,
-          getColor: getEdgeColor,
+          id,
+          data: lines.data,
+          getSourcePosition: (_, { index, target }) => endPos(ids[index], 0, target, sec),
+          getTargetPosition: (_, { index, target }) => endPos(ids[index], 1, target, sec),
+          getColor: via(getEdgeColor),
           opacity,
           visible: opacity > 0,
           extensions: [edgeFilter],
-          getFilterValue: edgeFilterValue,
+          getFilterValue: via(edgeFilterValue),
           filterRange: [[0, sampleK()], [1, 1], coreRange()],
           getWidth: 1,
           widthUnits: 'pixels',
           parameters: blendParams(false),
-          updateTriggers: { getSourcePosition: trig, getTargetPosition: trig, getColor: colourTrig, getFilterValue: colourTrig },
-          transitions: { getSourcePosition: TRANSITION, getTargetPosition: TRANSITION },
+          updateTriggers: { getSourcePosition: lines.trig, getTargetPosition: lines.trig, getColor: colourTrig, getFilterValue: colourTrig },
+          transitions: mapLayer(id) ? MOVE : SETTLE,
         }),
       );
     }
