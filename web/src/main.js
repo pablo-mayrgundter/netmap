@@ -210,7 +210,6 @@ function ensureGlobe() {
     onClick: onClick,
     onViewStateChange: ({ viewState }) => {
       globeCam = viewState;
-      moving();
       writeHashSoon();
       if (Math.abs(viewState.zoom - globeZoom) > 0.05) {
         globeZoom = viewState.zoom;
@@ -221,24 +220,6 @@ function ensureGlobe() {
     controller: { doubleClickZoom: false }, // double-click picks a node (see wireControls)
   });
   return globe;
-}
-
-// ?movedpr=1: draw the globe at this device-pixel ratio (at most) while the
-// camera moves, and at the screen's again once it has been still for
-// MOVE_SETTLE_MS. Fewer pixels to fill per frame while zooming, at the cost
-// of a softer picture until it settles; the picture at rest is unchanged.
-const MOVE_DPR = Number(params.get('movedpr')) || 0;
-const MOVE_SETTLE_MS = 180;
-let movingTimer = 0;
-function moving() {
-  if (!MOVE_DPR || !globe || devicePixelRatio <= MOVE_DPR) return;
-  if (!movingTimer) globe.setProps({ useDevicePixels: MOVE_DPR });
-  clearTimeout(movingTimer);
-  movingTimer = setTimeout(() => {
-    movingTimer = 0;
-    globe.setProps({ useDevicePixels: true });
-    globe.redraw('settled');
-  }, MOVE_SETTLE_MS);
 }
 
 function baseStyle() {
