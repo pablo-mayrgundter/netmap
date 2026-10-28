@@ -11,6 +11,7 @@ import { listDatasets, loadBundle } from './data.js';
 import { route } from './route.js';
 import { parseTrace, loadLookups, resolveTrace, ipText } from './trace.js';
 import { orbitsQuery, resolveOrbitsSrc } from './orbitsConfig.js';
+import { hashChanges } from './hashParts.js';
 
 // Material Icons (Apache-2.0), the same glyphs as MUI's icons, inlined as SVG.
 import hubIcon from '@material-design-icons/svg/filled/hub.svg?raw';
@@ -271,9 +272,20 @@ function setBasemap(v) {
     state.glow = false;
     $('glow').checked = false;
   }
-  map.setStyle(baseStyle());
-  map.once('styledata', () => updateRaster());
+  setBaseStyle();
   render();
+}
+
+// A new basemap. setStyle drops the network's raster layer, and the new style
+// can't take it back until its own sources have loaded (updateRaster waits for
+// that, and styledata comes before it), so the new style carries it.
+function setBaseStyle() {
+  map.setStyle(baseStyle(), {
+    transformStyle: (_, next) => {
+      const net = netRaster();
+      return net ? { ...next, sources: { ...next.sources, net: net.source }, layers: [...next.layers, net.layer] } : next;
+    },
+  });
 }
 
 // Raster XYZ layer from `netmap tiles` (static) or `netmap serve-tiles` (on demand).
@@ -281,21 +293,31 @@ function updateRaster() {
   if (!map.isStyleLoaded()) return;
   if (map.getLayer('net')) map.removeLayer('net');
   if (map.getSource('net')) map.removeSource('net');
-  if (state.renderer !== 'raster' || !G) return;
+  const net = netRaster();
+  if (!net) return;
+  map.addSource('net', net.source);
+  map.addLayer(net.layer);
+}
+
+// The raster layer's source and layer for the state, or null for none.
+function netRaster() {
+  if (state.renderer !== 'raster' || !G) return null;
   const base = TILE_SERVER || `${G.root}/tiles`;
   // Backbone-only tiles are optional (`netmap tiles --backbone`); fall back to
   // the full-link pyramid rather than requesting tiles that don't exist.
   const bb = `backbone/${state.mode}`;
   const layer = state.backboneOnly && !TILE_SERVER && tilesMeta[bb] ? bb : state.mode;
   const tm = tilesMeta[layer] || {};
-  map.addSource('net', {
-    type: 'raster',
-    tiles: [`${base}/${layer}/{z}/{x}/{y}.${tm.format || 'png'}`],
-    tileSize: 256,
-    minzoom: 0,
-    maxzoom: TILE_SERVER ? 14 : tm.maxzoom ?? 5,
-  });
-  map.addLayer({ id: 'net', type: 'raster', source: 'net', paint: { 'raster-fade-duration': 0 } });
+  return {
+    source: {
+      type: 'raster',
+      tiles: [`${base}/${layer}/{z}/{x}/{y}.${tm.format || 'png'}`],
+      tileSize: 256,
+      minzoom: 0,
+      maxzoom: TILE_SERVER ? 14 : tm.maxzoom ?? 5,
+    },
+    layer: { id: 'net', type: 'raster', source: 'net', paint: { 'raster-fade-duration': 0 } },
+  };
 }
 
 // --- colours -------------------------------------------------------------
@@ -1840,7 +1862,7 @@ function syncControls() {
 
 function hashParams() {
   const h = new URLSearchParams();
-  if (G) h.set('data', G.id);
+  if (G) h.set('data', state.dataset); // the one loading, while a load is in flight
   for (const [field, key, type] of PARAMS) {
     const v = state[field];
     h.set(key, type === 'bool' ? (v ? '1' : '0') : type === 'num' ? String(+v.toFixed(2)) : v);
@@ -1901,20 +1923,18 @@ function clearRoute() {
 // own permalink: a changed slider leaves the camera and the route alone.
 function applyHash() {
   const h = new URLSearchParams(location.hash.slice(1));
-  const now = hashParams();
-  const differs = (keys) => keys.some((k) => h.get(k) !== now.get(k));
+  const changed = hashChanges(h, hashParams(), { routers: G?.meta.kind === 'routers' });
   hash = h;
   const prev = { ...state };
   for (const p of PARAMS) state[p[0]] = readParam(p);
   if (!h.has('layout') && h.has('mode')) state.morph = { cyber: 0, hybrid: 0.5, geo: 1 }[h.get('mode')] ?? 1;
   state.mode = modeOf(state.morph);
   if (state.basemap !== prev.basemap) {
-    map.setStyle(baseStyle());
-    map.once('styledata', () => updateRaster());
+    setBaseStyle(); // with the raster layer the new state asks for
   } else if (state.mode !== prev.mode || state.renderer !== prev.renderer || state.backboneOnly !== prev.backboneOnly) {
     updateRaster();
   }
-  if (differs(['lon', 'lat', 'z', 'pitch', 'bearing']) || state.view !== prev.view) {
+  if (changed.camera || state.view !== prev.view) {
     const lon = Number(h.get('lon') ?? 10);
     const lat = Number(h.get('lat') ?? 25);
     const z = Number(h.get('z') ?? 1.6);
@@ -1926,16 +1946,17 @@ function applyHash() {
     }
   }
   const data = h.get('data');
-  if (data && G && data !== G.id && [...$('dataset').options].some((o) => o.value === data)) {
+  if (data && data !== state.dataset && [...$('dataset').options].some((o) => o.value === data)) {
     state.dataset = $('dataset').value = data;
     clearRoute();
     applyControls();
-    load(data); // which applies the hash's route
+    load(data, h); // which applies the hash's route
     return;
   }
-  if (G && differs(['as', 'pop', 'at', 'open', 'sel', 'selpop'])) {
+  if (loading) loadRoute = h; // the load in flight applies the latest route, on its map
+  else if (G && changed.route) {
     clearRoute();
-    applySelection();
+    applySelection(h);
   }
   applyControls();
   layoutCards();
@@ -2017,7 +2038,8 @@ function wireControls() {
   $('dataset').addEventListener('change', (e) => {
     state.dataset = e.target.value;
     clearRoute();
-    load(state.dataset);
+    writeHash(); // the new dataset, without the old one's route
+    load(state.dataset); // no route: the hash's was for the old map
   });
   map.on('moveend', writeHashSoon); // flight keys move every frame
   map.on('zoom', renderSoon);
@@ -2321,9 +2343,32 @@ function refreshOrbitLinks() {
 
 // --- boot ----------------------------------------------------------------
 
-async function load(id) {
+// Loads are superseded, not queued: only the latest one lands, and it applies
+// the route it was given (loadRoute, which applyHash replaces while the load
+// is in flight).
+let loadGen = 0;
+let loading = false;
+let loadRoute = null; // URLSearchParams, or null for no route
+
+async function load(id, route = null) {
+  const gen = ++loadGen;
+  loading = true;
+  loadRoute = route;
   $('stats').textContent = 'loading…';
-  G = await loadBundle(DATA_BASE, id);
+  const g = await loadBundle(DATA_BASE, id);
+  const tiles = {};
+  for (const m of g.meta.modes.flatMap((m) => [m, `backbone/${m}`])) {
+    try {
+      const r = await fetch(`${g.root}/tiles/${m}/tiles.json`);
+      if (r.ok) tiles[m] = await r.json();
+    } catch {
+      /* no tiles */
+    }
+  }
+  if (gen !== loadGen) return; // a later load replaced this one
+  loading = false;
+  G = g;
+  tilesMeta = tiles;
   rankCum = null;
   routeLF = null;
   fiberCache = { key: null, value: null };
@@ -2335,15 +2380,6 @@ async function load(id) {
   computeCoreRank();
   lowerNames = G.names.map((s) => s.toLowerCase());
   buildColours();
-  tilesMeta = {};
-  for (const m of G.meta.modes.flatMap((m) => [m, `backbone/${m}`])) {
-    try {
-      const r = await fetch(`${G.root}/tiles/${m}/tiles.json`);
-      if (r.ok) tilesMeta[m] = await r.json();
-    } catch {
-      /* no tiles */
-    }
-  }
   const hasTiles = TILE_SERVER || Object.keys(tilesMeta).length > 0;
   $('renderer').querySelector('[value="raster"]').disabled = !hasTiles;
   if (!hasTiles) state.renderer = 'vector';
@@ -2368,29 +2404,30 @@ async function load(id) {
   updateRaster();
   render();
 
-  applySelection();
+  if (loadRoute) applySelection(loadRoute);
+  loadRoute = null;
 }
 
-// The permalink's waypoints, as=A,B,… (and pop=… on router maps), and the
-// node being explored, sel= (and selpop=).
-function applySelection() {
-  const asns = (hash.get('as') || '').split(',').filter(Boolean).map(Number);
-  const pops = (hash.get('pop') || '').split(',').map(Number);
+// A permalink's waypoints, as=A,B,… (and pop=… on router maps), and the
+// node being explored, sel= (and selpop=), from its hash h.
+function applySelection(h) {
+  const asns = (h.get('as') || '').split(',').filter(Boolean).map(Number);
+  const pops = (h.get('pop') || '').split(',').map(Number);
   const nodes = asns
     .map((a, k) => (Number.isInteger(pops[k]) && G.asn[pops[k]] === a ? pops[k] : G.byAsn.get(a)))
     .filter((v) => v !== undefined);
   if (nodes.length) {
     nodes.forEach((v, k) => (state.waypoints[k] = v));
-    const at = Number(hash.get('at'));
+    const at = Number(h.get('at'));
     state.active = Number.isInteger(at) && at >= 1 && at <= nodes.length ? at - 1 : nodes.length - 1;
-    state.expanded = hash.get('open') !== '0';
+    state.expanded = h.get('open') !== '0';
     waypointsChanged();
     for (const v of nodes) setWaypointInfo(v);
   }
-  const sel = Number(hash.get('sel'));
-  const selpop = Number(hash.get('selpop'));
-  if (hash.has('sel')) {
-    const v = hash.has('selpop') && G.asn[selpop] === sel ? selpop : G.byAsn.get(sel);
+  const sel = Number(h.get('sel'));
+  const selpop = Number(h.get('selpop'));
+  if (h.has('sel')) {
+    const v = h.has('selpop') && G.asn[selpop] === sel ? selpop : G.byAsn.get(sel);
     if (v !== undefined) explore(v);
   }
 }
@@ -2411,7 +2448,7 @@ async function boot() {
   if (!state.dataset || !sets.some((s) => s.id === state.dataset)) state.dataset = sets[0].id;
   $('dataset').value = state.dataset;
   map.on('load', () => updateRaster());
-  await load(state.dataset);
+  await load(state.dataset, hash);
 }
 
 // Console / automation handle: netmap.state, netmap.render(), netmap.layers().

@@ -72,7 +72,9 @@ exploring, then clear the route. Camera (hold): `↑`/`↓` pitch, `←`/`→` r
 rotation and pitch.
 The URL hash is a full permalink: every control (layout, view, basemap,
 renderer, sliders, toggles), the dataset, the camera (2D map or globe) and the
-selected AS. Opening a link restores the view exactly. Without a hash the
+selected AS. Opening a link restores the view exactly, and an edit to the
+hash (typed, pasted, or back and forward) applies without a reload; picking
+a dataset from the list starts it without a route. Without a hash the
 viewer starts on the geo globe with backbone, points of presence and
 region-scale fiber bundles on.
 
