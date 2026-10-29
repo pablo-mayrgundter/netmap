@@ -8,9 +8,12 @@ import { feature } from 'topojson-client';
 import countries110 from 'world-atlas/countries-110m.json';
 
 import { listDatasets, loadBundle } from './data.js';
+import { arcChunks, buildArcs as buildArcPaths, perVertex } from './arcs.js';
 import { route } from './route.js';
 import { parseTrace, loadLookups, resolveTrace, ipText } from './trace.js';
 import { orbitsQuery, resolveOrbitsSrc } from './orbitsConfig.js';
+import { hashChanges } from './hashParts.js';
+import { nextLineSet, shownLinks } from './lineSet.js';
 
 // Material Icons (Apache-2.0), the same glyphs as MUI's icons, inlined as SVG.
 import hubIcon from '@material-design-icons/svg/filled/hub.svg?raw';
@@ -271,9 +274,20 @@ function setBasemap(v) {
     state.glow = false;
     $('glow').checked = false;
   }
-  map.setStyle(baseStyle());
-  map.once('styledata', () => updateRaster());
+  setBaseStyle();
   render();
+}
+
+// A new basemap. setStyle drops the network's raster layer, and the new style
+// can't take it back until its own sources have loaded (updateRaster waits for
+// that, and styledata comes before it), so the new style carries it.
+function setBaseStyle() {
+  map.setStyle(baseStyle(), {
+    transformStyle: (_, next) => {
+      const net = netRaster();
+      return net ? { ...next, sources: { ...next.sources, net: net.source }, layers: [...next.layers, net.layer] } : next;
+    },
+  });
 }
 
 // Raster XYZ layer from `netmap tiles` (static) or `netmap serve-tiles` (on demand).
@@ -281,21 +295,31 @@ function updateRaster() {
   if (!map.isStyleLoaded()) return;
   if (map.getLayer('net')) map.removeLayer('net');
   if (map.getSource('net')) map.removeSource('net');
-  if (state.renderer !== 'raster' || !G) return;
+  const net = netRaster();
+  if (!net) return;
+  map.addSource('net', net.source);
+  map.addLayer(net.layer);
+}
+
+// The raster layer's source and layer for the state, or null for none.
+function netRaster() {
+  if (state.renderer !== 'raster' || !G) return null;
   const base = TILE_SERVER || `${G.root}/tiles`;
   // Backbone-only tiles are optional (`netmap tiles --backbone`); fall back to
   // the full-link pyramid rather than requesting tiles that don't exist.
   const bb = `backbone/${state.mode}`;
   const layer = state.backboneOnly && !TILE_SERVER && tilesMeta[bb] ? bb : state.mode;
   const tm = tilesMeta[layer] || {};
-  map.addSource('net', {
-    type: 'raster',
-    tiles: [`${base}/${layer}/{z}/{x}/{y}.${tm.format || 'png'}`],
-    tileSize: 256,
-    minzoom: 0,
-    maxzoom: TILE_SERVER ? 14 : tm.maxzoom ?? 5,
-  });
-  map.addLayer({ id: 'net', type: 'raster', source: 'net', paint: { 'raster-fade-duration': 0 } });
+  return {
+    source: {
+      type: 'raster',
+      tiles: [`${base}/${layer}/{z}/{x}/{y}.${tm.format || 'png'}`],
+      tileSize: 256,
+      minzoom: 0,
+      maxzoom: TILE_SERVER ? 14 : tm.maxzoom ?? 5,
+    },
+    layer: { id: 'net', type: 'raster', source: 'net', paint: { 'raster-fade-duration': 0 } },
+  };
 }
 
 // --- colours -------------------------------------------------------------
@@ -414,62 +438,46 @@ function endPos(k, side, target, sec = layoutSec()) {
   return pos(G.edges[2 * k + side], target, sec);
 }
 
+// endPos for loops over many links: what it reads looked up once. Gives the
+// same numbers.
+function endReader(sec = layoutSec()) {
+  const p = G[sec];
+  const { edges, level } = G;
+  const pops = usePops(sec);
+  const { edge_pop: edgePop, pop_pos: popXY, pop_node: popNode } = G;
+  const globe = state.view === 'globe';
+  const alt = state.altitude;
+  return (k, side, target) => {
+    let i;
+    const q = pops ? edgePop[2 * k + side] : -1;
+    if (q >= 0) {
+      target[0] = popXY[2 * q];
+      target[1] = popXY[2 * q + 1];
+      i = popNode[q];
+    } else {
+      i = edges[2 * k + side];
+      target[0] = p[2 * i];
+      target[1] = p[2 * i + 1];
+    }
+    target[2] = globe ? Math.pow(level[i], 1.5) * ALT_MAX_M * alt * 2 : 0; // altitude(i)
+    return target;
+  };
+}
+
 // --- globe arcs ----------------------------------------------------------
-// Links on the globe are paths we build here: great-circle interpolation
-// between the two ends' altitudes plus a gentle sin-shaped lift. (deck's
-// ArcLayer in GlobeView lofts arcs thousands of km up, so from above they
-// read as radial dashes.) Short links get 1-2 segments, long ones up to 16.
-const D2R = Math.PI / 180;
-function buildArcs(count, ends, liftK) {
+// Links on the globe are paths we build (arcs.js): great-circle arcs between
+// the two ends' altitudes, with a gentle lift. `ends(k, a, b)` gives link k's
+// ends; `coarse[k]` set gives link k fewer segments.
+function buildArcs(count, ends, liftK, coarse = null) {
+  const e = new Float64Array(6 * count);
   const a = [0, 0, 0];
   const b = [0, 0, 0];
-  const segs = new Uint8Array(count);
-  let total = 0;
   for (let k = 0; k < count; k++) {
     ends(k, a, b);
-    const dLat = (b[1] - a[1]) * D2R;
-    const dLon = (b[0] - a[0]) * D2R;
-    const h = Math.sin(dLat / 2) ** 2 + Math.cos(a[1] * D2R) * Math.cos(b[1] * D2R) * Math.sin(dLon / 2) ** 2;
-    const ang = 2 * Math.asin(Math.min(1, Math.sqrt(h)));
-    segs[k] = Math.max(1, Math.min(16, Math.ceil(ang / (4 * D2R))));
-    total += segs[k] + 1;
+    e[6 * k] = a[0], e[6 * k + 1] = a[1], e[6 * k + 2] = a[2];
+    e[6 * k + 3] = b[0], e[6 * k + 4] = b[1], e[6 * k + 5] = b[2];
   }
-  const path = new Float32Array(total * 3);
-  const startIndices = new Uint32Array(count);
-  let v = 0;
-  for (let k = 0; k < count; k++) {
-    ends(k, a, b);
-    startIndices[k] = v;
-    const n = segs[k];
-    const la0 = a[1] * D2R, lo0 = a[0] * D2R, la1 = b[1] * D2R, lo1 = b[0] * D2R;
-    const x0 = Math.cos(la0) * Math.cos(lo0), y0 = Math.cos(la0) * Math.sin(lo0), z0 = Math.sin(la0);
-    const x1 = Math.cos(la1) * Math.cos(lo1), y1 = Math.cos(la1) * Math.sin(lo1), z1 = Math.sin(la1);
-    const ang = Math.acos(Math.max(-1, Math.min(1, x0 * x1 + y0 * y1 + z0 * z1)));
-    const lift = Math.min(ang * 6.371e6 * liftK, 250e3);
-    const so = Math.sin(ang);
-    let prevLon = a[0];
-    for (let i = 0; i <= n; i++) {
-      const t = i / n;
-      let x, y, z;
-      if (so < 1e-6) {
-        x = x0 + (x1 - x0) * t; y = y0 + (y1 - y0) * t; z = z0 + (z1 - z0) * t;
-      } else {
-        const w0 = Math.sin((1 - t) * ang) / so;
-        const w1 = Math.sin(t * ang) / so;
-        x = w0 * x0 + w1 * x1; y = w0 * y0 + w1 * y1; z = w0 * z0 + w1 * z1;
-      }
-      let lon = Math.atan2(y, x) / D2R;
-      // Keep longitudes continuous across the antimeridian.
-      while (lon - prevLon > 180) lon -= 360;
-      while (lon - prevLon < -180) lon += 360;
-      prevLon = lon;
-      path[3 * v] = lon;
-      path[3 * v + 1] = Math.atan2(z, Math.hypot(x, y)) / D2R;
-      path[3 * v + 2] = a[2] + (b[2] - a[2]) * t + lift * Math.sin(Math.PI * t);
-      v++;
-    }
-  }
-  return { length: count, startIndices, attributes: { getPath: { value: path, size: 3 } } };
+  return buildArcPaths(e, liftK, { coarse });
 }
 
 // deck.gl compares `data` by reference: a fresh object on every render (each
@@ -486,12 +494,165 @@ function memo(key, make) {
 }
 
 const arcCache = new Map();
-function cachedArcs(key, count, ends, liftK) {
+function cachedArcs(key, count, ends, liftK, coarse) {
   if (!arcCache.has(key)) {
     if (arcCache.size > 6) arcCache.clear();
-    arcCache.set(key, buildArcs(count, ends, liftK));
+    arcCache.set(key, buildArcs(count, ends, liftK, coarse));
   }
   return arcCache.get(key);
+}
+
+// --- the links' arcs ------------------------------------------------------
+// The globe draws arcs only for the links the toggles show (networkLayers). A
+// small set, such as backbone only's (the default: 0.29M vertices), is built
+// here at once, and stays warm under a big one so the toggle back is instant.
+// A big set (backbone only off: 631k links, 2.4M vertices) held the main
+// thread for over a second, so a worker builds it (arcsWorker.js), in chunks of
+// about CHUNK_VERTS vertices. Each chunk is a layer of its own, let in one per
+// frame, so each frame uploads one chunk's attributes; the set on screen stays
+// until the new one is all in. A big set is dropped once another takes its
+// place (netmap#16): it holds ~80 MB, and building it again holds nothing up.
+const SYNC_LINKS = 150_000;
+const CHUNK_VERTS = 100_000;
+const EDGE_LIFT = 0.03;
+const arcSets = { screen: null, warm: null, pending: null, serial: 0 };
+let arcWorker = null;
+
+function resetArcSets() {
+  cancelArcs();
+  arcSets.screen = arcSets.warm = null;
+}
+
+function cancelArcs() {
+  if (!arcSets.pending) return;
+  arcSets.pending = null;
+  cancelWorker(); // stop building what's no longer wanted
+}
+
+function cancelWorker() {
+  arcWorker?.terminate();
+  arcWorker = null;
+}
+
+// Both ends of each link of `list`, 6 numbers a link (lon, lat, altitude).
+function linkEnds(list) {
+  const end = endReader();
+  const out = new Float64Array(6 * list.length);
+  const a = [0, 0, 0];
+  const b = [0, 0, 0];
+  for (let j = 0; j < list.length; j++) {
+    end(list[j], 0, a);
+    end(list[j], 1, b);
+    out[6 * j] = a[0], out[6 * j + 1] = a[1], out[6 * j + 2] = a[2];
+    out[6 * j + 3] = b[0], out[6 * j + 4] = b[1], out[6 * j + 5] = b[2];
+  }
+  return out;
+}
+
+// Links that aren't backbone get the coarser subdivision (arcs.js COARSE).
+function coarseLinks(list) {
+  if (!G.edge_backbone) return null;
+  const out = new Uint8Array(list.length);
+  for (let j = 0; j < list.length; j++) out[j] = G.edge_backbone[list[j]] ? 0 : 1;
+  return out;
+}
+
+function startArcs(key, shown, colourTrig) {
+  const set = { key, id: ++arcSets.serial, shown, colourTrig, chunks: [], total: null, admitted: 0 };
+  const take = ({ from, to, total, startIndices, path }) => {
+    if (arcSets.pending !== set) return;
+    set.total = total;
+    set.chunks.push({
+      id: `edges-${set.id}-${set.chunks.length}`,
+      from,
+      data: { length: to - from, startIndices, attributes: { getPath: { value: path, size: 3 } } },
+    });
+    // all built: let the worker go, and with it its hold on this set
+    if (set.chunks.length === total) cancelWorker();
+    renderSoon();
+  };
+  const here = () => arcChunks(linkEnds(shown), EDGE_LIFT, { coarse: coarseLinks(shown), budget: CHUNK_VERTS }, take);
+  // in a task of its own, not the toggle's
+  setTimeout(() => arcSets.pending === set && postArcs(set, shown, take, here));
+  return set;
+}
+
+function postArcs(set, shown, take, here) {
+  const ends = linkEnds(shown);
+  const coarse = coarseLinks(shown);
+  try {
+    arcWorker = new Worker(new URL('./arcsWorker.js', import.meta.url), { type: 'module' });
+    arcWorker.onmessage = (e) => e.data.id === set.id && take(e.data);
+    arcWorker.onerror = (e) => {
+      // e.g. no module workers: build here, as before this worker
+      e.preventDefault?.();
+      cancelWorker();
+      if (arcSets.pending === set && !set.chunks.length) here();
+    };
+    arcWorker.postMessage({ id: set.id, ends, coarse, liftK: EDGE_LIFT, budget: CHUNK_VERTS }, coarse ? [ends.buffer, coarse.buffer] : [ends.buffer]);
+  } catch {
+    cancelWorker();
+    here();
+  }
+}
+
+// A chunk's colours and filter values, one per vertex, from the layer's own
+// accessors: deck takes them as they are (data.attributes by attribute name),
+// which costs a fraction of its accessor loop. They're filled when the chunk
+// is let in, under the toggles it was built for. `positions` names the path
+// to PathLayer's tesselator too, which otherwise allocates a float64 copy it
+// never fills (24 bytes a vertex) when the path comes as a binary buffer.
+function fillChunk(set, chunk, getColor, getFilterValue) {
+  const { length: n, startIndices } = chunk.data;
+  const verts = chunk.data.attributes.getPath.value.length / 3;
+  const colours = new Uint8ClampedArray(4 * n);
+  const filters = new Float32Array(3 * n);
+  const at = { index: 0, target: [0, 0, 0, 0] };
+  for (let j = 0; j < n; j++) {
+    at.index = set.shown[chunk.from + j];
+    getColor(null, at);
+    for (let c = 0; c < 4; c++) colours[4 * j + c] = at.target[c];
+    getFilterValue(null, at);
+    for (let c = 0; c < 3; c++) filters[3 * j + c] = at.target[c];
+  }
+  Object.assign(chunk.data.attributes, {
+    instanceColors: { value: perVertex(startIndices, verts, colours, 4), size: 4, type: 'unorm8' },
+    filterValues: { value: perVertex(startIndices, verts, filters, 3), size: 3 },
+    positions: chunk.data.attributes.getPath,
+  });
+}
+
+// The arc chunks to draw for the set `key` of links `shown`: { set, chunk,
+// visible } each. Called on every render; it lets in a big set's next chunk.
+function edgeArcChunks(key, shown, colourTrig) {
+  const S = arcSets;
+  if (S.screen?.key === key) cancelArcs();
+  else if (shown.length <= SYNC_LINKS) {
+    cancelArcs();
+    const data = cachedArcs(key, shown.length, (j, a, b) => (endPos(shown[j], 0, a), endPos(shown[j], 1, b)), EDGE_LIFT, coarseLinks(shown));
+    S.screen = S.warm = { key, shown, colourTrig, chunks: [{ id: 'edges', from: 0, data, accessors: true }] };
+  } else if (S.pending?.key !== key) {
+    cancelArcs();
+    S.pending = startArcs(key, shown, colourTrig);
+  }
+  const p = S.pending;
+  if (p) {
+    if (p.admitted === p.total) {
+      // every chunk was let in last frame: the new set takes over
+      S.screen = p;
+      S.pending = null;
+    } else if (p.admitted < p.chunks.length) {
+      p.admitted++;
+      renderSoon();
+    }
+  }
+  const out = [];
+  const sc = S.screen;
+  if (sc) for (const chunk of sc.chunks) out.push({ set: sc, chunk, visible: true });
+  if (S.warm && S.warm !== sc) out.push({ set: S.warm, chunk: S.warm.chunks[0], visible: false });
+  // a set coming in is drawn only if there's nothing else to show
+  if (S.pending) for (const chunk of S.pending.chunks.slice(0, S.pending.admitted)) out.push({ set: S.pending, chunk, visible: !sc });
+  return out;
 }
 
 // --- fiber bundles -------------------------------------------------------
@@ -507,21 +668,35 @@ function fiberCellSize() {
 }
 
 let fiberCache = { key: null, value: null };
+// The last few, so toggling back (backbone only) doesn't bundle again: each is
+// a byte a link and the fibers.
+const fiberSets = new Map();
 function computeFibers() {
   const K = sampleK();
-  const key = `${layoutSec()}|${state.mode}|${usePops()}|${state.fiberCell}|${K}|${state.core}|${state.showTransit}|${state.showPeering}|${state.backboneOnly}|${state.view}|${state.altitude}`;
+  const sec = layoutSec();
+  const key = `${sec}|${state.mode}|${usePops()}|${state.fiberCell}|${K}|${state.core}|${state.showTransit}|${state.showPeering}|${state.backboneOnly}|${state.view}|${state.altitude}`;
   if (fiberCache.key === key) return fiberCache.value;
+  if (fiberSets.has(key)) {
+    fiberCache = { key, value: fiberSets.get(key) };
+    return fiberCache.value;
+  }
   const cell = fiberCellSize();
   const inv = 1 / cell;
   const W = Math.ceil(inv) + 2; // cells per row; ids < 2^26 for cell >= 1.25e-4
-  const merc = (lon, lat) => {
+  // into `out`: the loop below runs for every shown link, so it allocates nothing
+  const merc = (lon, lat, out) => {
     const s = Math.sin((Math.max(-85, Math.min(85, lat)) * Math.PI) / 180);
-    return [(lon + 180) / 360, 0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)];
+    out[0] = (lon + 180) / 360;
+    out[1] = 0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI);
+    return out;
   };
   const a = [0, 0, 0];
   const b = [0, 0, 0];
-  const lf = edgeLengthFactor(layoutSec());
+  const ma = [0, 0];
+  const mb = [0, 0];
+  const lf = edgeLengthFactor(sec);
   const cut = coreCut();
+  const end = endReader(sec);
   const index = new Map();
   const edgeBundle = new Int32Array(G.e).fill(-1);
   // per-bundle accumulators (grown as needed)
@@ -534,12 +709,12 @@ function computeFibers() {
     if (G.edge_rank && G.edge_rank[k] > K) continue;
     if (G.edgeCore[k] < cut) continue;
     if (!edgeVisible(k)) continue;
-    endPos(k, 0, a);
-    endPos(k, 1, b);
-    const [xa, ya] = merc(a[0], a[1]);
-    const [xb, yb] = merc(b[0], b[1]);
-    const ca = Math.floor(ya * inv) * W + Math.floor(xa * inv);
-    const cb = Math.floor(yb * inv) * W + Math.floor(xb * inv);
+    end(k, 0, a);
+    end(k, 1, b);
+    merc(a[0], a[1], ma);
+    merc(b[0], b[1], mb);
+    const ca = Math.floor(ma[1] * inv) * W + Math.floor(ma[0] * inv);
+    const cb = Math.floor(mb[1] * inv) * W + Math.floor(mb[0] * inv);
     if (ca === cb) continue; // local: stays a plain link
     const swap = ca > cb;
     const pk = (swap ? cb : ca) * 67108864 + (swap ? ca : cb);
@@ -558,9 +733,10 @@ function computeFibers() {
       }
     }
     const o = bi * NF;
-    const [sx, sy, sz, tx, ty, tz] = swap ? [xb, yb, b[2], xa, ya, a[2]] : [xa, ya, a[2], xb, yb, b[2]];
-    acc[o] += sx, acc[o + 1] += sy, acc[o + 2] += sz;
-    acc[o + 3] += tx, acc[o + 4] += ty, acc[o + 5] += tz;
+    const ms = swap ? mb : ma, mt = swap ? ma : mb; // source and target ends, in mercator
+    const es = swap ? b : a, et = swap ? a : b;
+    acc[o] += ms[0], acc[o + 1] += ms[1], acc[o + 2] += es[2];
+    acc[o + 3] += mt[0], acc[o + 4] += mt[1], acc[o + 5] += et[2];
     acc[o + 6] += edgeColor[k * 4], acc[o + 7] += edgeColor[k * 4 + 1], acc[o + 8] += edgeColor[k * 4 + 2];
     const wk = G.edge_weight ? G.edge_weight[k] : 1; // router links on router maps
     acc[o + 9] += wk;
@@ -600,6 +776,8 @@ function computeFibers() {
     }
   }
   fiberCache = { key, value: { fibers, hidden, bundled } };
+  fiberSets.set(key, fiberCache.value);
+  if (fiberSets.size > 4) fiberSets.delete(fiberSets.keys().next().value);
   return fiberCache.value;
 }
 
@@ -762,6 +940,45 @@ function edgeVisible(k) {
 const edgeFilter = new DataFilterExtension({ filterSize: 3 });
 
 const TRANSITION = { duration: 1400, easing: (t) => t * t * (3 - 2 * t) };
+const MOVE = { getSourcePosition: TRANSITION, getTargetPosition: TRANSITION };
+// A new line layer's first positions, as a 1 ms transition: its transitions
+// then start the first layout move from where its lines are. With none, or a
+// 0 ms one, they keep no from-state and that move would jump; a 1.4 s one
+// would redraw the map for 1.4 s with nothing moving.
+const SETTLE = { getSourcePosition: { duration: 1 }, getTargetPosition: { duration: 1 } };
+
+// The links the toggles show and no fiber hides, ascending; memoised on the
+// toggles and the fiber cell (colourTrig).
+const shownEdges = (hidden, colourTrig) =>
+  memo(`edges-shown|${colourTrig}`, () => shownLinks(G.e, (k) => edgeVisible(k) && !(hidden && hidden[k])));
+
+// The 2D map's link lines (src/lineSet.js): the shown links, kept in place
+// while the layout moves, and rebuilt once it has.
+let edgeLineSet = null;
+let edgeLineTimer = 0;
+const edgeLineId = (s) => (s.gen ? `edges-${s.gen}` : 'edges');
+const mapLayer = (id) => overlay._deck?.layerManager?.getLayers().find((l) => l.id === id);
+function edgeLines(hidden, colourTrig, trig) {
+  const prev = edgeLineSet;
+  const layer = prev && mapLayer(edgeLineId(prev));
+  const now = performance.now();
+  const s = (edgeLineSet = nextLineSet(prev, shownEdges(hidden, colourTrig), {
+    trig,
+    sec: layoutSec(),
+    owner: G,
+    live: !!layer,
+    applied: layer?.props.data === prev?.data,
+    now,
+    moveMs: TRANSITION.duration + 500,
+    count: G.e,
+  }));
+  if (s.held) renderSoon(); // until deck has the links at the old layout
+  if (s.until > now && s.until !== prev?.until) {
+    clearTimeout(edgeLineTimer);
+    edgeLineTimer = setTimeout(renderSoon, s.until - now + 20);
+  }
+  return s;
+}
 
 const showVectorsFor = (globeView) => state.renderer === 'vector' || globeView;
 
@@ -782,15 +999,12 @@ function networkLayers(globeView) {
     target[3] = edgeVisible(index) && !(hidden && hidden[index]) ? edgeColor[o + 3] * lf[index] * (hidden ? 0.5 : 1) : 0;
     return target;
   };
-  const edgeData = memo('edges', () => ({ length: G.e }));
   const edgeFilterValue = (_, { index, target }) => {
     target[0] = G.edge_rank ? G.edge_rank[index] : 0;
     target[1] = edgeVisible(index) && !(hidden && hidden[index]) ? 1 : 0; // fiber members too
     target[2] = G.edgeCore[index];
     return target;
   };
-  const src = (_, { index, target }) => endPos(index, 0, target);
-  const dst = (_, { index, target }) => endPos(index, 1, target);
   const layers = [];
   const showVectors = state.renderer === 'vector' || globeView;
 
@@ -801,23 +1015,50 @@ function networkLayers(globeView) {
       // PathLayer's projects three points per vertex, so hidden links cost as
       // much per frame as shown ones: every redraw while zooming paid for all
       // 657k (4.8M path segments, 57M vertices) when backbone-only with fibers
-      // shows 0.29M segments. The toggles and the fiber cell rebuild the arcs;
-      // the sampling and core sliders stay on the GPU filter, so they stay
-      // instant.
-      const shown = memo(`edges-shown|${colourTrig}`, () => {
-        const out = new Uint32Array(G.e);
-        let n = 0;
-        for (let k = 0; k < G.e; k++) if (edgeVisible(k) && !(hidden && hidden[k])) out[n++] = k;
-        return out.slice(0, n);
-      });
-      const data = cachedArcs(`edges|${trig}|${colourTrig}`, shown.length, (j, a, b) => (endPos(shown[j], 0, a), endPos(shown[j], 1, b)), 0.03);
+      // shows 0.29M segments. The toggles and the fiber cell rebuild the arcs
+      // (edgeArcChunks: a big set in a worker, in chunks); the sampling and
+      // core sliders stay on the GPU filter, so they stay instant.
+      const shown = shownEdges(hidden, colourTrig);
       const at = { index: 0, target: null };
-      const via = (f) => (d, { index, target }) => ((at.index = shown[index]), (at.target = target), f(d, at));
+      const via = (list, from, f) => (d, { index, target }) => ((at.index = list[from + index]), (at.target = target), f(d, at));
+      for (const { set, chunk, visible } of edgeArcChunks(`edges|${trig}|${colourTrig}`, shown, colourTrig)) {
+        if (!chunk.accessors && !chunk.data.attributes.instanceColors) fillChunk(set, chunk, getEdgeColor, edgeFilterValue);
+        layers.push(
+          new PathLayer({
+            id: chunk.id,
+            data: chunk.data,
+            _pathType: 'open',
+            getColor: via(set.shown, chunk.from, getEdgeColor),
+            opacity,
+            visible: visible && opacity > 0,
+            extensions: [edgeFilter],
+            getFilterValue: via(set.shown, chunk.from, edgeFilterValue),
+            filterRange: [[0, sampleK()], [1, 1], coreRange()],
+            getWidth: 1,
+            widthUnits: 'pixels',
+            billboard: true,
+            parameters: blendParams(true),
+            updateTriggers: { getColor: set.colourTrig, getFilterValue: set.colourTrig },
+          }),
+        );
+      }
+    } else {
+      // Lines for the shown links only, as the globe's arcs: the GPU filter
+      // culls a link after its vertex shader has run, so every redraw while
+      // zooming paid for all 657k links (2.6M vertices) when the default view
+      // shows 61k. The toggles and the fiber cell rebuild the lines; sampling
+      // and core stay on the GPU filter.
+      const lines = edgeLines(hidden, colourTrig, trig);
+      const { ids, sec } = lines;
+      const id = edgeLineId(lines);
+      const at = { index: 0, target: null };
+      const via = (f) => (d, { index, target }) => ((at.index = ids[index]), (at.target = target), f(d, at));
       layers.push(
-        new PathLayer({
-          id: 'edges',
-          data,
-          _pathType: 'open',
+        new LineLayer({
+          id,
+          data: lines.data,
+          getSourcePosition: (_, { index, target }) => endPos(ids[index], 0, target, sec),
+          getTargetPosition: (_, { index, target }) => endPos(ids[index], 1, target, sec),
           getColor: via(getEdgeColor),
           opacity,
           visible: opacity > 0,
@@ -826,29 +1067,9 @@ function networkLayers(globeView) {
           filterRange: [[0, sampleK()], [1, 1], coreRange()],
           getWidth: 1,
           widthUnits: 'pixels',
-          billboard: true,
-          parameters: blendParams(true),
-          updateTriggers: { getColor: colourTrig, getFilterValue: colourTrig },
-        }),
-      );
-    } else {
-      layers.push(
-        new LineLayer({
-          id: 'edges',
-          data: edgeData,
-          getSourcePosition: src,
-          getTargetPosition: dst,
-          getColor: getEdgeColor,
-          opacity,
-          visible: opacity > 0,
-          extensions: [edgeFilter],
-          getFilterValue: edgeFilterValue,
-          filterRange: [[0, sampleK()], [1, 1], coreRange()],
-          getWidth: 1,
-          widthUnits: 'pixels',
           parameters: blendParams(false),
-          updateTriggers: { getSourcePosition: trig, getTargetPosition: trig, getColor: colourTrig, getFilterValue: colourTrig },
-          transitions: { getSourcePosition: TRANSITION, getTargetPosition: TRANSITION },
+          updateTriggers: { getSourcePosition: lines.trig, getTargetPosition: lines.trig, getColor: colourTrig, getFilterValue: colourTrig },
+          transitions: mapLayer(id) ? MOVE : SETTLE,
         }),
       );
     }
@@ -1840,7 +2061,7 @@ function syncControls() {
 
 function hashParams() {
   const h = new URLSearchParams();
-  if (G) h.set('data', G.id);
+  if (G) h.set('data', state.dataset); // the one loading, while a load is in flight
   for (const [field, key, type] of PARAMS) {
     const v = state[field];
     h.set(key, type === 'bool' ? (v ? '1' : '0') : type === 'num' ? String(+v.toFixed(2)) : v);
@@ -1901,20 +2122,18 @@ function clearRoute() {
 // own permalink: a changed slider leaves the camera and the route alone.
 function applyHash() {
   const h = new URLSearchParams(location.hash.slice(1));
-  const now = hashParams();
-  const differs = (keys) => keys.some((k) => h.get(k) !== now.get(k));
+  const changed = hashChanges(h, hashParams(), { routers: G?.meta.kind === 'routers' });
   hash = h;
   const prev = { ...state };
   for (const p of PARAMS) state[p[0]] = readParam(p);
   if (!h.has('layout') && h.has('mode')) state.morph = { cyber: 0, hybrid: 0.5, geo: 1 }[h.get('mode')] ?? 1;
   state.mode = modeOf(state.morph);
   if (state.basemap !== prev.basemap) {
-    map.setStyle(baseStyle());
-    map.once('styledata', () => updateRaster());
+    setBaseStyle(); // with the raster layer the new state asks for
   } else if (state.mode !== prev.mode || state.renderer !== prev.renderer || state.backboneOnly !== prev.backboneOnly) {
     updateRaster();
   }
-  if (differs(['lon', 'lat', 'z', 'pitch', 'bearing']) || state.view !== prev.view) {
+  if (changed.camera || state.view !== prev.view) {
     const lon = Number(h.get('lon') ?? 10);
     const lat = Number(h.get('lat') ?? 25);
     const z = Number(h.get('z') ?? 1.6);
@@ -1926,16 +2145,17 @@ function applyHash() {
     }
   }
   const data = h.get('data');
-  if (data && G && data !== G.id && [...$('dataset').options].some((o) => o.value === data)) {
+  if (data && data !== state.dataset && [...$('dataset').options].some((o) => o.value === data)) {
     state.dataset = $('dataset').value = data;
     clearRoute();
     applyControls();
-    load(data); // which applies the hash's route
+    load(data, h); // which applies the hash's route
     return;
   }
-  if (G && differs(['as', 'pop', 'at', 'open', 'sel', 'selpop'])) {
+  if (loading) loadRoute = h; // the load in flight applies the latest route, on its map
+  else if (G && changed.route) {
     clearRoute();
-    applySelection();
+    applySelection(h);
   }
   applyControls();
   layoutCards();
@@ -2017,7 +2237,8 @@ function wireControls() {
   $('dataset').addEventListener('change', (e) => {
     state.dataset = e.target.value;
     clearRoute();
-    load(state.dataset);
+    writeHash(); // the new dataset, without the old one's route
+    load(state.dataset); // no route: the hash's was for the old map
   });
   map.on('moveend', writeHashSoon); // flight keys move every frame
   map.on('zoom', renderSoon);
@@ -2321,13 +2542,38 @@ function refreshOrbitLinks() {
 
 // --- boot ----------------------------------------------------------------
 
-async function load(id) {
+// Loads are superseded, not queued: only the latest one lands, and it applies
+// the route it was given (loadRoute, which applyHash replaces while the load
+// is in flight).
+let loadGen = 0;
+let loading = false;
+let loadRoute = null; // URLSearchParams, or null for no route
+
+async function load(id, route = null) {
+  const gen = ++loadGen;
+  loading = true;
+  loadRoute = route;
   $('stats').textContent = 'loading…';
-  G = await loadBundle(DATA_BASE, id);
+  const g = await loadBundle(DATA_BASE, id);
+  const tiles = {};
+  for (const m of g.meta.modes.flatMap((m) => [m, `backbone/${m}`])) {
+    try {
+      const r = await fetch(`${g.root}/tiles/${m}/tiles.json`);
+      if (r.ok) tiles[m] = await r.json();
+    } catch {
+      /* no tiles */
+    }
+  }
+  if (gen !== loadGen) return; // a later load replaced this one
+  loading = false;
+  G = g;
+  tilesMeta = tiles;
   rankCum = null;
   routeLF = null;
   fiberCache = { key: null, value: null };
+  fiberSets.clear();
   arcCache.clear();
+  resetArcSets();
   memoCache.clear();
   infoRecs.clear();
   if (!$('tracePanel').hidden) setTimeout(updateTrace); // re-resolve on the new map
@@ -2335,15 +2581,6 @@ async function load(id) {
   computeCoreRank();
   lowerNames = G.names.map((s) => s.toLowerCase());
   buildColours();
-  tilesMeta = {};
-  for (const m of G.meta.modes.flatMap((m) => [m, `backbone/${m}`])) {
-    try {
-      const r = await fetch(`${G.root}/tiles/${m}/tiles.json`);
-      if (r.ok) tilesMeta[m] = await r.json();
-    } catch {
-      /* no tiles */
-    }
-  }
   const hasTiles = TILE_SERVER || Object.keys(tilesMeta).length > 0;
   $('renderer').querySelector('[value="raster"]').disabled = !hasTiles;
   if (!hasTiles) state.renderer = 'vector';
@@ -2368,29 +2605,30 @@ async function load(id) {
   updateRaster();
   render();
 
-  applySelection();
+  if (loadRoute) applySelection(loadRoute);
+  loadRoute = null;
 }
 
-// The permalink's waypoints, as=A,B,… (and pop=… on router maps), and the
-// node being explored, sel= (and selpop=).
-function applySelection() {
-  const asns = (hash.get('as') || '').split(',').filter(Boolean).map(Number);
-  const pops = (hash.get('pop') || '').split(',').map(Number);
+// A permalink's waypoints, as=A,B,… (and pop=… on router maps), and the
+// node being explored, sel= (and selpop=), from its hash h.
+function applySelection(h) {
+  const asns = (h.get('as') || '').split(',').filter(Boolean).map(Number);
+  const pops = (h.get('pop') || '').split(',').map(Number);
   const nodes = asns
     .map((a, k) => (Number.isInteger(pops[k]) && G.asn[pops[k]] === a ? pops[k] : G.byAsn.get(a)))
     .filter((v) => v !== undefined);
   if (nodes.length) {
     nodes.forEach((v, k) => (state.waypoints[k] = v));
-    const at = Number(hash.get('at'));
+    const at = Number(h.get('at'));
     state.active = Number.isInteger(at) && at >= 1 && at <= nodes.length ? at - 1 : nodes.length - 1;
-    state.expanded = hash.get('open') !== '0';
+    state.expanded = h.get('open') !== '0';
     waypointsChanged();
     for (const v of nodes) setWaypointInfo(v);
   }
-  const sel = Number(hash.get('sel'));
-  const selpop = Number(hash.get('selpop'));
-  if (hash.has('sel')) {
-    const v = hash.has('selpop') && G.asn[selpop] === sel ? selpop : G.byAsn.get(sel);
+  const sel = Number(h.get('sel'));
+  const selpop = Number(h.get('selpop'));
+  if (h.has('sel')) {
+    const v = h.has('selpop') && G.asn[selpop] === sel ? selpop : G.byAsn.get(sel);
     if (v !== undefined) explore(v);
   }
 }
@@ -2411,7 +2649,7 @@ async function boot() {
   if (!state.dataset || !sets.some((s) => s.id === state.dataset)) state.dataset = sets[0].id;
   $('dataset').value = state.dataset;
   map.on('load', () => updateRaster());
-  await load(state.dataset);
+  await load(state.dataset, hash);
 }
 
 // Console / automation handle: netmap.state, netmap.render(), netmap.layers().
@@ -2429,6 +2667,11 @@ window.netmap = {
   },
   byAsn: (asn) => G.byAsn.get(asn),
   orbits: () => orbits, // the Orbits layer, while it's on (src/orbits.js)
+  // the globe's link arcs: the set on screen, and one coming in (perf probes)
+  edgeArcs: () => {
+    const { screen, pending } = arcSets;
+    return { screen: screen?.key ?? null, chunks: screen?.chunks.length ?? 0, pending: pending && { key: pending.key, built: pending.chunks.length, admitted: pending.admitted, total: pending.total } };
+  },
   // what one zoom event costs on the main thread (perf probes)
   zoomStep: (dz) => {
     if (state.view === 'globe') globeZoom += dz;
