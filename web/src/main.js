@@ -3,12 +3,14 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { Deck, _GlobeView as GlobeView } from '@deck.gl/core';
 import { MapboxOverlay } from '@deck.gl/mapbox';
 import { DataFilterExtension } from '@deck.gl/extensions';
-import { LineLayer, PathLayer, ScatterplotLayer, GeoJsonLayer, SolidPolygonLayer } from '@deck.gl/layers';
-import { feature } from 'topojson-client';
-import countries110 from 'world-atlas/countries-110m.json';
+import { LineLayer, PathLayer, ScatterplotLayer } from '@deck.gl/layers';
 
 import { listDatasets, loadBundle } from './data.js';
 import { arcChunks, buildArcs as buildArcPaths, perVertex } from './arcs.js';
+import {
+  graticule, altitudeOf, EDGE_LIFT, regionColours, makeEndReader, linkLengthFactors, routeLengthFactors, linkOpacity, nodeLook, nodeRadius, ADDITIVE,
+} from './globeScene.js';
+import { earthLayers } from './earth.js';
 import { route } from './route.js';
 import { parseTrace, loadLookups, resolveTrace, ipText } from './trace.js';
 import { orbitsQuery, resolveOrbitsSrc } from './orbitsConfig.js';
@@ -50,31 +52,9 @@ const BASEMAPS = {
   },
 };
 
-// The default basemap: a dark lat/lon graticule generated here, so there are
-// no tile requests, tokens or placeholder images. Every 10 degrees, brighter
-// every 30.
+// The default basemap: the dark lat/lon graticule of globeScene.js, so there
+// are no tile requests, tokens or placeholder images.
 const GRID_BG = '#04060b';
-const graticule = (() => {
-  const features = [];
-  const line = (coords, major) => features.push({ type: 'Feature', properties: { major }, geometry: { type: 'LineString', coordinates: coords } });
-  for (let lon = -180; lon <= 180; lon += 10) {
-    const pts = [];
-    for (let lat = -80; lat <= 80; lat += 2) pts.push([lon, lat]);
-    line(pts, lon % 30 === 0);
-  }
-  for (let lat = -80; lat <= 80; lat += 10) {
-    const pts = [];
-    for (let lon = -180; lon <= 180; lon += 2) pts.push([lon, lat]);
-    line(pts, lat % 30 === 0);
-  }
-  return { type: 'FeatureCollection', features };
-})();
-
-
-// Core networks hover this high (at full hierarchy level, default slider) on
-// the globe: high enough to read as a layer above the cities, low enough that
-// zooming in doesn't put them in the camera's face.
-const ALT_MAX_M = 700_000;
 
 // --- state ---------------------------------------------------------------
 
@@ -325,24 +305,7 @@ function netRaster() {
 // --- colours -------------------------------------------------------------
 
 function buildColours() {
-  regionRGB = G.meta.regions.map((r) => r.rgb);
-  nodeColor = new Uint8Array(G.n * 4);
-  for (let i = 0; i < G.n; i++) {
-    const c = regionRGB[G.region[i]];
-    nodeColor.set([c[0], c[1], c[2], 255], i * 4);
-  }
-  edgeColor = new Uint8Array(G.e * 4);
-  for (let k = 0; k < G.e; k++) {
-    const a = regionRGB[G.region[G.edges[2 * k]]];
-    const b = regionRGB[G.region[G.edges[2 * k + 1]]];
-    edgeColor[k * 4] = (a[0] + b[0]) >> 1;
-    edgeColor[k * 4 + 1] = (a[1] + b[1]) >> 1;
-    edgeColor[k * 4 + 2] = (a[2] + b[2]) >> 1;
-    // transit and intra-AS backbone brighter than peering; router-level
-    // bundles brighten with log(number of router links)
-    const w = G.edge_weight ? Math.min(1, 0.35 + 0.18 * Math.log2(1 + G.edge_weight[k])) : 1;
-    edgeColor[k * 4 + 3] = (G.edge_rel[k] === 0 ? 190 : 255) * w;
-  }
+  ({ regionRGB, nodeColor, edgeColor } = regionColours(G));
 }
 
 // Per-edge brightness by on-screen length, per mode: each link gets a fixed
@@ -352,37 +315,12 @@ const lengthFactor = {};
 function edgeLengthFactor(sec) {
   const key = `${sec}|${usePops(sec)}`;
   if (lengthFactor[key]) return lengthFactor[key];
-  const merc = (lon, lat) => {
-    const s = Math.sin((Math.max(-85, Math.min(85, lat)) * Math.PI) / 180);
-    return [(lon + 180) / 360, 0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)];
-  };
-  const f = new Float32Array(G.e);
-  const ta = [0, 0, 0];
-  const tb = [0, 0, 0];
-  for (let k = 0; k < G.e; k++) {
-    endPos(k, 0, ta, sec);
-    endPos(k, 1, tb, sec);
-    const [x0, y0] = merc(ta[0], ta[1]);
-    const [x1, y1] = merc(tb[0], tb[1]);
-    const len = Math.hypot(x1 - x0, y1 - y0);
-    f[k] = Math.min(1, Math.pow(0.004 / Math.max(len, 1e-7), 0.6));
-  }
-  return (lengthFactor[key] = f);
+  return (lengthFactor[key] = linkLengthFactors(G.e, endReader(sec)));
 }
 
 let routeLF = null;
 function routeLengthFactor() {
-  if (routeLF) return routeLF;
-  const r = G.pop_routes;
-  const f = new Float32Array(r.length / 2);
-  for (let k = 0; k < f.length; k++) {
-    const a = r[2 * k];
-    const b = r[2 * k + 1];
-    const dLon = Math.abs(G.pop_pos[2 * a] - G.pop_pos[2 * b]);
-    const len = Math.hypot(Math.min(dLon, 360 - dLon), G.pop_pos[2 * a + 1] - G.pop_pos[2 * b + 1]) / 360;
-    f[k] = Math.min(1, Math.pow(0.012 / Math.max(len, 1e-7), 0.6));
-  }
-  return (routeLF = f);
+  return (routeLF ??= routeLengthFactors(G));
 }
 
 // --- positions -----------------------------------------------------------
@@ -392,8 +330,7 @@ const visibleNode = (i) => state.mode !== 'geo' || hasGeo(i);
 
 function altitude(i) {
   if (state.view !== 'globe') return 0;
-  const l = G.level[i];
-  return Math.pow(l, 1.5) * ALT_MAX_M * state.altitude * 2;
+  return altitudeOf(G.level[i], state.altitude);
 }
 
 // The cyber -> geo slider walks the layout stops (data.js: cyber, blends,
@@ -441,27 +378,7 @@ function endPos(k, side, target, sec = layoutSec()) {
 // endPos for loops over many links: what it reads looked up once. Gives the
 // same numbers.
 function endReader(sec = layoutSec()) {
-  const p = G[sec];
-  const { edges, level } = G;
-  const pops = usePops(sec);
-  const { edge_pop: edgePop, pop_pos: popXY, pop_node: popNode } = G;
-  const globe = state.view === 'globe';
-  const alt = state.altitude;
-  return (k, side, target) => {
-    let i;
-    const q = pops ? edgePop[2 * k + side] : -1;
-    if (q >= 0) {
-      target[0] = popXY[2 * q];
-      target[1] = popXY[2 * q + 1];
-      i = popNode[q];
-    } else {
-      i = edges[2 * k + side];
-      target[0] = p[2 * i];
-      target[1] = p[2 * i + 1];
-    }
-    target[2] = globe ? Math.pow(level[i], 1.5) * ALT_MAX_M * alt * 2 : 0; // altitude(i)
-    return target;
-  };
+  return makeEndReader(G, { sec, pops: usePops(sec), globe: state.view === 'globe', alt: state.altitude });
 }
 
 // --- globe arcs ----------------------------------------------------------
@@ -514,7 +431,6 @@ function cachedArcs(key, count, ends, liftK, coarse) {
 // place (netmap#16): it holds ~80 MB, and building it again holds nothing up.
 const SYNC_LINKS = 150_000;
 const CHUNK_VERTS = 100_000;
-const EDGE_LIFT = 0.03;
 const arcSets = { screen: null, warm: null, pending: null, serial: 0 };
 let arcWorker = null;
 
@@ -831,18 +747,8 @@ function fiberLayers(globeView, opacity) {
 
 // --- layers --------------------------------------------------------------
 
-const additive = {
-  blend: true,
-  blendColorOperation: 'add',
-  blendColorSrcFactor: 'src-alpha',
-  blendColorDstFactor: 'one',
-  blendAlphaOperation: 'add',
-  blendAlphaSrcFactor: 'one',
-  blendAlphaDstFactor: 'one-minus-src-alpha',
-};
-
 function blendParams(globeView) {
-  const p = state.glow ? { ...additive } : {};
+  const p = state.glow ? { ...ADDITIVE } : {};
   p.depthWriteEnabled = false;
   p.depthCompare = globeView ? 'less-equal' : 'always';
   return p;
@@ -909,10 +815,10 @@ function samplingLabel() {
 let globeZoom = 1;
 function edgeOpacity(globeView) {
   const z = globeView ? globeZoom + 0.6 : map.getZoom();
-  let k = (state.glow ? 0.0025 : 0.007) * Math.pow(state.edgeAlpha / 0.35, 2);
-  if (state.backboneOnly && G) k *= G.e / Math.max(G.meta.counts.backbone || G.e, 1) / 1.5;
-  else if (G) k *= Math.pow(G.e / Math.max(visibleAtK(sampleK()), 1), 0.6);
-  return Math.min(1, k * Math.pow(2, z));
+  let sparsity = 1;
+  if (state.backboneOnly && G) sparsity = G.e / Math.max(G.meta.counts.backbone || G.e, 1) / 1.5;
+  else if (G) sparsity = Math.pow(G.e / Math.max(visibleAtK(sampleK()), 1), 0.6);
+  return linkOpacity({ zoom: z, glow: state.glow, edgeAlpha: state.edgeAlpha, sparsity });
 }
 
 let pending = false;
@@ -1104,7 +1010,7 @@ function networkLayers(globeView) {
     };
     if (globeView) {
       const r = G.pop_routes;
-      const data = cachedArcs(`routes|${trig}`, routeData.length, (k, a, b) => (popPos(r[2 * k], a), popPos(r[2 * k + 1], b)), 0.03);
+      const data = cachedArcs(`routes|${trig}`, routeData.length, (k, a, b) => (popPos(r[2 * k], a), popPos(r[2 * k + 1], b)), EDGE_LIFT);
       layers.push(
         new PathLayer({
           id: 'routes',
@@ -1172,14 +1078,13 @@ function networkLayers(globeView) {
 
   const pops = usePops();
   const z = globeView ? globeZoom + 0.6 : map.getZoom();
-  const sizeK = (0.25 + state.nodeSize * 2.2) * Math.min(1.6, 0.45 + 0.13 * z);
-  const nodeOpacity = Math.min(0.9, 0.1 * Math.pow(2, z - 1) * (state.glow ? 1 : 2.5));
+  const { sizeK, opacity: nodeOpacity } = nodeLook({ zoom: z, nodeSize: state.nodeSize, glow: state.glow });
   layers.push(
     new ScatterplotLayer({
       id: 'nodes',
       data: memo('nodes', () => ({ length: G.n })),
       getPosition: (_, { index, target }) => pos(index, target),
-      getRadius: (_, { index }) => (visibleNode(index) && !(pops && hasPops(index)) ? 0.6 + Math.log2(G.degree[index] + 1) * 0.55 : 0),
+      getRadius: (_, { index }) => (visibleNode(index) && !(pops && hasPops(index)) ? nodeRadius(G.degree[index]) : 0),
       getFillColor: (_, { index, target }) => {
         const o = index * 4;
         target[0] = nodeColor[o];
@@ -1330,35 +1235,7 @@ function networkLayers(globeView) {
   return layers;
 }
 
-const earth = (() => {
-  const land = feature(countries110, countries110.objects.countries);
-  return [
-    new SolidPolygonLayer({
-      id: 'ocean',
-      data: [{ polygon: [[-180, 90], [0, 90], [180, 90], [180, -90], [0, -90], [-180, -90]] }],
-      getPolygon: (d) => d.polygon,
-      getFillColor: [4, 6, 11, 255],
-    }),
-    new GeoJsonLayer({
-      id: 'land',
-      data: land,
-      filled: true,
-      stroked: true,
-      getFillColor: [22, 28, 40, 255],
-      getLineColor: [60, 72, 96, 255],
-      lineWidthMinPixels: 0.5,
-    }),
-    new GeoJsonLayer({
-      id: 'grid',
-      data: graticule,
-      stroked: true,
-      filled: false,
-      getLineColor: (f) => (f.properties.major ? [36, 50, 74, 200] : [24, 32, 50, 170]),
-      lineWidthUnits: 'pixels',
-      getLineWidth: (f) => (f.properties.major ? 0.9 : 0.6),
-    }),
-  ];
-})();
+const earth = earthLayers();
 
 let globeLayers = []; // the globe's own layers, as render() last set them (the Orbits links go on top)
 function render() {
