@@ -306,6 +306,67 @@ WebGL calls (portal-netgl refuses anything else), and the frame is
 sandboxed (`allow-scripts allow-same-origin`: no navigating netmap,
 popups or forms). Messages are pinned to the guest's origin both ways.
 
+## map.html: NetMap as a guest in another app
+
+`map.html` (built and deployed next to the app, at
+`https://pablo-mayrgundter.github.io/netmap/map.html`) is NetMap for other
+apps to embed: a [NetGL](https://github.com/pablo-mayrgundter/portal/tree/main/packages/portal-netgl)
+**guest**. A host page loads it in a hidden cross-origin iframe; deck.gl
+draws the globe into portal-netgl's recording WebGL2 context
+(`makeNetGLGuestContext`, passed to deck as `gl`), and the host replays the
+calls into its own context. [exo.cafe](https://exo.cafe) shows it live in
+the gate on its street. It's the first step of portal RFC 0004 §5
+([portal#56](https://github.com/pablo-mayrgundter/portal/issues/56)): a
+window, drawn full frame for a camera the host asks for, not yet geometry
+placed in the host's 3D space.
+
+It draws the app's default globe from the same code (`src/globeScene.js`,
+`src/earth.js`, `arcs.js`, `data.js`): the geo layout, backbone links in one
+vantage tree, points of presence and their core routes, and the nodes,
+glowing, over the dark grid and land. No MapLibre basemap and no fiber
+bundles yet. It loads `?data=` if given, else the first AS-level dataset.
+
+The protocol (`src/mapView.js`, `npm test`):
+
+```
+host                                        map.html (guest)
+netgl:ready-ack                        ◄──  netgl:ready
+layer:hello-ack {accepted}             ◄──  layer:hello {adapter: 'netmap',
+                                              capabilities: {kinds: ['map'], frames: ['ecef'],
+                                              views: ['globe-camera'], time, marks},
+                                              units: {meters: 1}, earth: {model: 'sphere', radius: 6370972}}
+                                       ◄──  layer:status {status: 'loading' | 'ready' | 'degraded' | 'error'}
+layer:view {viewId, view: {kind: 'globe-camera',
+  lon, lat, zoom | fit, bearing, pitch,
+  width, height, timeMs,
+  marks: [{lon, lat, rgb?}]}}          ──►  deck draws that camera, full frame
+replay into a texture                  ◄──  netgl:batch … frame-end {viewId}
+(send the view again)                  ◄──  layer:invalidate (the map's data came)
+```
+
+* **The camera** is deck's `GlobeView` view state. `fit` instead of `zoom`
+  asks for the globe's disc to span that much of the frame's height (deck's
+  zoom depends on the frame's height and the latitude; `fitZoom` works it
+  out). Up to 16 `marks` are drawn as rings, e.g. where the host sits.
+* **One frame per view**, and no other: deck's own redraws (data or shaders
+  coming in) are held back (`_customRender`) and turned into a
+  `layer:invalidate`, so the host never replays a frame it didn't ask for.
+  Each frame updates deck's layers, draws, and submits luma's queued
+  commands before `endFrame()`, so the frame holds all of its calls.
+* **Who may embed it:** `https://exo.cafe` and
+  `https://pablo-mayrgundter.github.io`, from `location.ancestorOrigins` or
+  the referrer, or loopback hosts while `map.html` is itself on loopback.
+  Messages are pinned to that origin both ways. Opened on its own, the page
+  says what it is and draws nothing.
+
+To try it locally, serve a build on one port and a host on another (two
+origins):
+
+```sh
+cd web && npm run build && python3 -m http.server 5481 --directory dist
+# exo: http://localhost:4173/?enter&netmap_src=http://127.0.0.1:5481/map.html
+```
+
 ## Data
 
 | source | used for | licence |
