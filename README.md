@@ -315,10 +315,11 @@ apps to embed: a [NetGL](https://github.com/pablo-mayrgundter/portal/tree/main/p
 draws the globe into portal-netgl's recording WebGL2 context
 (`makeNetGLGuestContext`, passed to deck as `gl`), and the host replays the
 calls into its own context. [exo.cafe](https://exo.cafe) shows it live in
-the gate on its street. It's the first step of portal RFC 0004 §5
+the gate on its street, and in place under its street, the map the die
+sits on. It's portal RFC 0004 §5
 ([portal#56](https://github.com/pablo-mayrgundter/portal/issues/56)): a
-window, drawn full frame for a camera the host asks for, not yet geometry
-placed in the host's 3D space.
+window, drawn full frame for a globe camera the host asks for, or the
+host's own camera as a matrix view in ECEF, drawn in place in its frame.
 
 It draws the app's default globe from the same code (`src/globeScene.js`,
 `src/earth.js`, `arcs.js`, `data.js`): the geo layout, backbone links in one
@@ -333,13 +334,17 @@ host                                        map.html (guest)
 netgl:ready-ack                        ◄──  netgl:ready
 layer:hello-ack {accepted}             ◄──  layer:hello {adapter: 'netmap',
                                               capabilities: {kinds: ['map'], frames: ['ecef'],
-                                              views: ['globe-camera'], time, marks},
-                                              units: {meters: 1}, earth: {model: 'sphere', radius: 6370972}}
+                                              views: ['globe-camera', 'matrix'], time, marks},
+                                              units: {meters: 1}, earth: {model: 'sphere', radius: 6370972},
+                                              contracts: {color: 'display' | 'linear', alpha: 'premultiplied'}}
                                        ◄──  layer:status {status: 'loading' | 'ready' | 'degraded' | 'error'}
 layer:view {viewId, view: {kind: 'globe-camera',
   lon, lat, zoom | fit, bearing, pitch,
   width, height, timeMs,
   marks: [{lon, lat, rgb?}]}}          ──►  deck draws that camera, full frame
+layer:view {viewId, view: {kind: 'matrix', frame: 'ecef',
+  viewMatrix, projectionMatrix,
+  width, height, timeMs}}             ──►  deck draws the host's own camera
 replay into a texture                  ◄──  netgl:batch … frame-end {viewId}
 (send the view again)                  ◄──  layer:invalidate (the map's data came)
 ```
@@ -348,6 +353,21 @@ replay into a texture                  ◄──  netgl:batch … frame-end {vie
   asks for the globe's disc to span that much of the frame's height (deck's
   zoom depends on the frame's height and the latitude; `fitZoom` works it
   out). Up to 16 `marks` are drawn as rings, e.g. where the host sits.
+* **A matrix view** (`src/matrixView.js`) is the host's camera exactly: a
+  view matrix from ECEF metres to its eye (rigid, column-major, float64)
+  and its projection (only its field is used; deck makes its own near and
+  far). deck's globe is float32 with no offset trick, about 0.75 m of
+  precision, so as its `GlobeView` does it switches to a flat Web Mercator
+  viewport above zoom 12, below some 30 km, centred under the camera and
+  with deck's float64 offsets: it holds from 1 cm up. Low down the
+  graticule near the camera is drawn densified (`nearGraticule`), since
+  deck can't draw its own 2°-long segments from a few metres up.
+  `npm test` checks that every point lands on the pixel the host's own
+  matrices put it at, from orbit and from a centimetre over the ground.
+* **`?output=linear`** decodes the frame from sRGB in a last pass (a deck
+  `PostProcessEffect`, premultiplied), for a host that draws it into a
+  linear buffer of its own and encodes it at its end; the hello's
+  `contracts.color` says which.
 * **One frame per view**, and no other: deck's own redraws (data or shaders
   coming in) are held back (`_customRender`) and turned into a
   `layer:invalidate`, so the host never replays a frame it didn't ask for.

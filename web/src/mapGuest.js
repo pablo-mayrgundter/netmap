@@ -10,7 +10,7 @@
 // (globeScene.js, arcs.js, data.js): the geo layout, backbone links in one
 // vantage tree, points of presence and their core routes, and the nodes,
 // glowing. No basemap but the dark grid and land, and no fiber bundles yet.
-import { Deck, _GlobeView as GlobeView } from '@deck.gl/core';
+import { Deck, _GlobeView as GlobeView, PostProcessEffect } from '@deck.gl/core';
 import { PathLayer, ScatterplotLayer } from '@deck.gl/layers';
 import { makeNetGLGuestContext, parentTransport } from '@pablo-mayrgundter/portal-netgl/core';
 import { listDatasets, loadBundle } from './data.js';
@@ -21,12 +21,29 @@ import {
 } from './globeScene.js';
 import { earthLayers } from './earth.js';
 import { MAP_HELLO, pickHostOrigin, cameraOf, pickDataset } from './mapView.js';
+import { MatrixView, cameraPlace, nearGraticule, curvatureDrop, GLOBE_MAX_ZOOM } from './matrixView.js';
 
 const DATA_BASE = new URL(import.meta.env.VITE_DATA_BASE || './data', document.baseURI).href.replace(/\/$/, '');
 const params = new URLSearchParams(location.search);
 // netmap's defaults (main.js PARAMS): the look the app opens with.
 const LOOK = { alt: 0.2, edgeAlpha: 0.05, nodeSize: 0, glow: true };
 const HELLO_RESEND_MS = 500;
+// ?output=linear: the frame's display colours decoded from sRGB, for a host
+// that draws it in place, in a linear buffer of its own that it encodes at
+// its end (exo's chip scene). Premultiplied either way.
+const LINEAR = params.get('output') === 'linear';
+const HELLO = { ...MAP_HELLO, contracts: { color: LINEAR ? 'linear' : 'display', alpha: 'premultiplied' } };
+/** The last pass for ?output=linear: deck's frame, premultiplied, decoded from sRGB. */
+const linearize = {
+  name: 'linearize',
+  fs: `vec4 linearize_filterColor_ext(vec4 c, vec2 texSize, vec2 texCoord) {
+    if (c.a <= 0.0) return vec4(0.0);
+    vec3 d = clamp(c.rgb / c.a, 0.0, 1.0);
+    d = mix(d / 12.92, pow((d + 0.055) / 1.055, vec3(2.4)), step(0.04045, d));
+    return vec4(d * c.a, c.a);
+  }`,
+  passes: [{ filter: true }],
+};
 
 const stats = { host: null, status: 'starting', dataset: null, links: 0, views: 0, frames: 0, loadMs: 0, buildMs: 0, drawMs: [] };
 window.netmapGuest = { stats };
@@ -81,7 +98,7 @@ function start(host) {
   let acked = false;
   const hello = () => {
     if (acked) return;
-    transport.post(MAP_HELLO);
+    transport.post(HELLO);
     setTimeout(hello, HELLO_RESEND_MS);
   };
 
@@ -93,14 +110,18 @@ function start(host) {
   let drawing = false; // inside draw(): deck may draw
   let asked = false; // a layer:invalidate is out, unanswered
 
+  const globeView = new GlobeView({ resolution: 5 });
+  const matrixView = new MatrixView({ resolution: 5 });
   const deck = new Deck({
     gl: core.gl,
-    views: new GlobeView({ resolution: 5 }),
+    views: globeView,
+    effects: LINEAR ? [new PostProcessEffect(linearize)] : [],
     viewState: { longitude: 0, latitude: 0, zoom: 0 },
     controller: false,
     useDevicePixels: false,
     layers: earth,
     onLoad: () => {
+      if (LINEAR) withDepth(deck.deckRenderer);
       deckReady = true;
       draw();
     },
@@ -121,6 +142,25 @@ function start(host) {
       status('error', String(e?.message ?? e));
     },
   });
+  window.netmapGuest.deck = deck; // for a host's checks (Playwright)
+
+
+  // deck draws a post-process effect's input into framebuffers of its own,
+  // with a colour attachment only: no depth, so nothing hides anything (the
+  // globe's far side, links beyond the horizon). Give them depth.
+  function withDepth(renderer) {
+    if (!renderer) return;
+    renderer._resizeRenderBuffers = function resizeWithDepth(canvasContext = this.device.canvasContext) {
+      const size = canvasContext.getDrawingBufferSize();
+      if (!this.renderBuffers.length) {
+        for (const i of [0, 1]) {
+          const texture = this.device.createTexture({ sampler: { minFilter: 'linear', magFilter: 'linear' }, width: size[0], height: size[1] });
+          this.renderBuffers.push(this.device.createFramebuffer({ id: `deck-renderbuffer-${i}`, colorAttachments: [texture], depthStencilAttachment: 'depth24plus' }));
+        }
+      }
+      for (const buffer of this.renderBuffers) buffer.resize(size);
+    };
+  }
 
   function resize(w, h) {
     if (w === size[0] && h === size[1]) return;
@@ -140,7 +180,12 @@ function start(host) {
     const { viewId, cam } = latest;
     resize(cam.width, cam.height);
     const t0 = performance.now();
-    deck.setProps({ viewState: cam.viewState, layers: [...earth, ...networkLayers(cam), ...markLayers(cam)] });
+    const matrix = cam.kind === 'matrix';
+    deck.setProps({
+      views: matrix ? matrixView : globeView,
+      viewState: matrix ? { viewMatrix: cam.viewMatrix, projectionMatrix: cam.projectionMatrix } : cam.viewState,
+      layers: [...earth, ...nearGridLayers(cam), ...networkLayers(cam), ...markLayers(cam)],
+    });
     asked = false;
     drawing = true;
     try {
@@ -163,9 +208,36 @@ function start(host) {
     if (stats.drawMs.length > 120) stats.drawMs.shift();
   }
 
+  // Low over the map, on deck's flat viewport, the network as over the
+  // sphere: every point lowered by how far the Earth falls away from the
+  // tangent plane under the camera (matrixView.js curvatureDrop), so links
+  // beyond the horizon sink below the flat ground. Remade when the point
+  // under the camera moves half a degree.
+  let flat = null;
+  function flatNet(place) {
+    if (flat && Math.abs(flat.lon - place.lon) < 0.5 && Math.abs(flat.lat - place.lat) < 0.5) return flat;
+    const { lon, lat } = place;
+    const curve = (src) => {
+      if (!src) return null;
+      const v = src.attributes.getPath.value;
+      const out = new Float32Array(v);
+      for (let i = 0; i < out.length; i += 3) out[i + 2] -= curvatureDrop(lon, lat, v[i], v[i + 1]);
+      return { ...src, attributes: { getPath: { value: out, size: 3 } } };
+    };
+    flat = { lon, lat, key: `${lon.toFixed(1)},${lat.toFixed(1)}`, arcs: curve(net.arcs), routes: curve(net.routes) };
+    return flat;
+  }
+
   function networkLayers(cam) {
     if (!net) return [];
-    const zoom = cam.viewState.zoom + 0.6; // the map zoom netmap's looks are tuned at
+    const place = cam.kind === 'matrix' ? cameraPlace(cam.viewMatrix, cam.height) : null;
+    const low = place && place.globeZoom > GLOBE_MAX_ZOOM ? flatNet(place) : null;
+    const dropped = (get) => (low ? (i, target) => { get(i, target); target[2] -= curvatureDrop(low.lon, low.lat, target[0], target[1]); return target; } : get);
+    const nodePos = dropped(net.pos);
+    const popPos = dropped(net.popPos);
+    const posTrigger = low ? low.key : 'globe';
+    // The map zoom netmap's looks are tuned at; a matrix view's is the globe's at its camera's height.
+    const zoom = (place ? place.globeZoom : cam.viewState.zoom) + 0.6;
     const opacity = linkOpacity({ zoom, glow: LOOK.glow, edgeAlpha: LOOK.edgeAlpha, sparsity: net.sparsity });
     const { sizeK, opacity: nodeOpacity } = nodeLook({ zoom, nodeSize: LOOK.nodeSize, glow: LOOK.glow });
     const blend = { ...ADDITIVE, depthWriteEnabled: false, depthCompare: 'less-equal' };
@@ -173,7 +245,7 @@ function start(host) {
     const layers = [
       new PathLayer({
         id: 'edges',
-        data: net.arcs,
+        data: low ? low.arcs : net.arcs,
         _pathType: 'open',
         getColor: (_, { index, target }) => {
           const k = links[index];
@@ -196,7 +268,7 @@ function start(host) {
       layers.push(
         new PathLayer({
           id: 'routes',
-          data: net.routes,
+          data: low ? low.routes : net.routes,
           _pathType: 'open',
           getColor: (_, { index, target }) => {
             const o = G.pop_node[G.pop_routes[2 * index]] * 4;
@@ -227,7 +299,8 @@ function start(host) {
       new ScatterplotLayer({
         id: 'nodes',
         data: net.nodes,
-        getPosition: (_, { index, target }) => net.pos(index, target),
+        getPosition: (_, { index, target }) => nodePos(index, target),
+        updateTriggers: { getPosition: posTrigger },
         getRadius: (_, { index }) => ((G.flags[index] & 1) === 1 && !hasPops(index) ? nodeRadius(G.degree[index]) : 0),
         getFillColor: (_, { index, target }) => fill(index * 4, target),
         radiusUnits: 'pixels',
@@ -243,7 +316,8 @@ function start(host) {
         new ScatterplotLayer({
           id: 'pops',
           data: net.pops,
-          getPosition: (_, { index, target }) => net.popPos(index, target),
+          getPosition: (_, { index, target }) => popPos(index, target),
+          updateTriggers: { getPosition: posTrigger },
           getRadius: (_, { index }) => {
             const i = G.pop_node[index];
             const w = Math.sqrt(G.pop_offset[i + 1] - G.pop_offset[i]);
@@ -259,6 +333,57 @@ function start(host) {
       );
     }
     return layers;
+  }
+
+  // A matrix view low over the map (deck's flat viewport): the graticule
+  // near the camera, densified (matrixView.js nearGraticule), in its colours.
+  function nearGridLayers(cam) {
+    if (cam.kind !== 'matrix') return [];
+    const place = cameraPlace(cam.viewMatrix, cam.height);
+    if (place.globeZoom <= GLOBE_MAX_ZOOM) return [];
+    return [
+      new PathLayer({
+        id: 'grid-near',
+        data: inFront(nearGraticule(place.lon, place.lat, place.h), cam.viewMatrix, place.h),
+        getPath: (d) => d.path,
+        positionFormat: 'XY', // [lon, lat]: on the ground
+        getColor: (d) => (d.major ? [36, 50, 74, 200] : [24, 32, 50, 170]),
+        // Wider than the graticule's own: this canvas has no antialiasing,
+        // and lines under a pixel wide don't draw.
+        getWidth: (d) => (d.major ? 1.5 : 1),
+        widthUnits: 'pixels',
+        // Their width in screen pixels everywhere along them: a ground
+        // path's is in metres at the view's centre, under a pixel at a
+        // grazing camera's horizon.
+        billboard: true,
+        // On the ground, after the ocean and land: in the ocean's plane, and
+        // a flat map's depth range is too long to tell them apart there.
+        parameters: { depthCompare: 'always', depthWriteEnabled: false },
+        updateTriggers: { getPath: [place.lon, place.lat, place.h] },
+      }),
+    ];
+  }
+
+  // The runs of each path in front of the camera: a path's segments with an
+  // end behind it don't draw (deck builds their ribbons in clip space).
+  function inFront(lines, v, h) {
+    const out = [];
+    const R = 6370972, D2R = Math.PI / 180;
+    for (const line of lines) {
+      let run = [];
+      for (const [lon, lat] of line.path) {
+        const l = lon * D2R, p = lat * D2R;
+        const x = R * Math.cos(p) * Math.cos(l), y = R * Math.cos(p) * Math.sin(l), z = R * Math.sin(p);
+        const ez = v[2] * x + v[6] * y + v[10] * z + v[14];
+        if (ez < -0.05 * h) run.push([lon, lat]);
+        else {
+          if (run.length > 1) out.push({ path: run, major: line.major });
+          run = [];
+        }
+      }
+      if (run.length > 1) out.push({ path: run, major: line.major });
+    }
+    return out;
   }
 
   // Places the host marks (exo marks where it sits: 0° N 0° E), as a ring
@@ -353,7 +478,7 @@ function start(host) {
       if (msg.accepted === false) console.info(`[map] ${host} declined: ${msg.reason ?? ''}`);
     } else if (msg?.type === 'layer:view') {
       const cam = cameraOf(msg.view);
-      if (!cam) return console.warn('[map] not a globe camera:', msg.view?.kind);
+      if (!cam) return console.warn('[map] not a view this page draws:', msg.view?.kind);
       stats.views += 1;
       latest = { viewId: msg.viewId, cam };
       draw();
