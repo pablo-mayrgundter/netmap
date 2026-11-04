@@ -22,6 +22,13 @@
 //                                               draws the map in place
 //   replay the frame                       ◄──  netgl:batch … frame-end {viewId}
 //   (sends the view again)                 ◄──  layer:invalidate (the map's data came)
+//
+// A host showing the map more than once (exo's map under its street, and a
+// framed globe at its gate) names each view but its main one with a `part`
+// (`layer:view {viewId, part: 'window', view}`): each is drawn as its own
+// frame, tagged with it (frame-end {viewId, part}), so the host can replay
+// each into its own target (portal-netgl's parts, `beforeFrame`). One page,
+// one deck and one download of the map for every view of it.
 
 import { isLocalOrigin } from './orbitsConfig.js';
 
@@ -45,6 +52,8 @@ export const MAP_HELLO = Object.freeze({
     time: true,
     anchors: false,
     marks: true,
+    // Named views, each drawn as a frame of its own (layer:view's `part`).
+    parts: true,
   },
   // RFC 0004 §1: NetMap's numbers are ECEF metres, on deck's sphere.
   units: { meters: 1 },
@@ -168,6 +177,15 @@ function marksOf(view) {
     marks.push({ lon: mLon, lat: mLat, rgb });
   }
   return marks;
+}
+
+/**
+ * A `layer:view`'s part: a short name for a view other than the host's main
+ * one ('window'), or null for the main one (or a name this page won't take).
+ */
+export function partOf(msg) {
+  const p = msg?.part;
+  return typeof p === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(p) ? p : null;
 }
 
 /** The dataset map.html draws: `?data=`'s if listed, else the first AS-level one, else the first. */

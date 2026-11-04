@@ -334,7 +334,7 @@ host                                        map.html (guest)
 netgl:ready-ack                        ◄──  netgl:ready
 layer:hello-ack {accepted}             ◄──  layer:hello {adapter: 'netmap',
                                               capabilities: {kinds: ['map'], frames: ['ecef'],
-                                              views: ['globe-camera', 'matrix'], time, marks},
+                                              views: ['globe-camera', 'matrix'], time, marks, parts},
                                               units: {meters: 1}, earth: {model: 'sphere', radius: 6370972},
                                               contracts: {color: 'display' | 'linear', alpha: 'premultiplied'}}
                                        ◄──  layer:status {status: 'loading' | 'ready' | 'degraded' | 'error'}
@@ -345,7 +345,9 @@ layer:view {viewId, view: {kind: 'globe-camera',
 layer:view {viewId, view: {kind: 'matrix', frame: 'ecef',
   viewMatrix, projectionMatrix,
   width, height, timeMs}}             ──►  deck draws the host's own camera
-replay into a texture                  ◄──  netgl:batch … frame-end {viewId}
+layer:view {viewId, part: 'window',
+  view: {…}}                           ──►  another view, drawn as a frame of its own
+replay into a texture                  ◄──  netgl:batch … frame-end {viewId, part?}
 (send the view again)                  ◄──  layer:invalidate (the map's data came)
 ```
 
@@ -368,6 +370,18 @@ replay into a texture                  ◄──  netgl:batch … frame-end {vie
   `PostProcessEffect`, premultiplied), for a host that draws it into a
   linear buffer of its own and encodes it at its end; the hello's
   `contracts.color` says which.
+* **Several views, one page.** A host that shows the map more than once
+  (exo: the map in place under its street, and a framed globe at its gate)
+  names each view but its main one with a `part`. Each is drawn as its own
+  frame, tagged with it on its frame-end, so the host can replay each into
+  its own target (portal-netgl's parts and `beforeFrame`): one deck and
+  one download of the map for all of them. Each part keeps its own layers,
+  hidden while another draws, and its own post-process buffers per size, so
+  turning from one view to the other doesn't re-tessellate the land or
+  re-upload the network; deck's own size is set with each view's. (deck
+  tessellates a polygon once, under the viewport current then, so the ocean
+  is 10° cells rather than one quad: a part's layers are first made under
+  its own view, flat or globe.)
 * **One frame per view**, and no other: deck's own redraws (data or shaders
   coming in) are held back (`_customRender`) and turned into a
   `layer:invalidate`, so the host never replays a frame it didn't ask for.

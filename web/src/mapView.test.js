@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { _GlobeViewport as GlobeViewport } from '@deck.gl/core';
-import { MAP_HELLO, MAP_HOST_ORIGINS, MAX_MARKS, cameraOf, fitZoom, pickDataset, pickHostOrigin } from './mapView.js';
+import { MAP_HELLO, MAP_HOST_ORIGINS, MAX_MARKS, cameraOf, fitZoom, partOf, pickDataset, pickHostOrigin } from './mapView.js';
 import { altitudeOf, ALT_MAX_M, makeEndReader, regionColours } from './globeScene.js';
 
 const prodPage = 'https://pablo-mayrgundter.github.io';
@@ -128,4 +128,11 @@ test('link ends: at the point of presence when asked, floating by level on the g
   assert.equal(altitudeOf(1, 0.5), ALT_MAX_M);
   const flat = makeEndReader(G, { sec: 'pos_geo', pops: false, globe: false, alt: 0.2 });
   assert.deepEqual(flat(0, 1, [0, 0, 0]), [30, 40, 0]);
+});
+
+test("a view's part: a short name for a view but the main one", () => {
+  assert.equal(partOf({ part: 'window' }), 'window');
+  assert.equal(partOf({}), null);
+  for (const bad of ['', 'Window', 'a b', 'x'.repeat(40), 7, '__proto__']) assert.equal(partOf({ part: bad }), null, String(bad));
+  assert.equal(MAP_HELLO.capabilities.parts, true);
 });
