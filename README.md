@@ -378,7 +378,10 @@ replay into a texture                  ◄──  netgl:batch … frame-end {vie
   one download of the map for all of them. Each part keeps its own layers,
   hidden while another draws, and its own post-process buffers per size, so
   turning from one view to the other doesn't re-tessellate the land or
-  re-upload the network; deck's own size is set with each view's.
+  re-upload the network; deck's own size is set with each view's. (deck
+  tessellates a polygon once, under the viewport current then, so the ocean
+  is 10° cells rather than one quad: a part's layers are first made under
+  its own view, flat or globe.)
 * **One frame per view**, and no other: deck's own redraws (data or shaders
   coming in) are held back (`_customRender`) and turned into a
   `layer:invalidate`, so the host never replays a frame it didn't ask for.

@@ -5,13 +5,27 @@ import { feature } from 'topojson-client';
 import countries110 from 'world-atlas/countries-110m.json';
 import { graticule } from './globeScene.js';
 
+/**
+ * The ocean, as 10° cells. deck tessellates a polygon once, at the
+ * resolution of the viewport current then: a globe's subdivides it, a flat
+ * map's doesn't. One quad for the whole Earth, made under a flat viewport,
+ * didn't draw there (mapGuest.js makes a part's layers under its own view);
+ * cells hold under either.
+ */
+const OCEAN = [];
+for (let lon = -180; lon < 180; lon += 10) {
+  for (let lat = -90; lat < 90; lat += 10) {
+    OCEAN.push({ polygon: [[lon, lat], [lon + 10, lat], [lon + 10, lat + 10], [lon, lat + 10]] });
+  }
+}
+
 /** The globe under the map: ocean, land and the graticule. */
 export function earthLayers() {
   const land = feature(countries110, countries110.objects.countries);
   return [
     new SolidPolygonLayer({
       id: 'ocean',
-      data: [{ polygon: [[-180, 90], [0, 90], [180, 90], [180, -90], [0, -90], [-180, -90]] }],
+      data: OCEAN,
       getPolygon: (d) => d.polygon,
       getFillColor: [4, 6, 11, 255],
     }),
