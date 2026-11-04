@@ -14,6 +14,12 @@
 //   layer:view {view: {kind: 'globe-camera',
 //     lon, lat, zoom | fit, bearing, pitch,
 //     width, height, timeMs, marks}}       ──►  deck draws that camera, full frame
+//   layer:view {view: {kind: 'matrix',
+//     frame: 'ecef', viewMatrix,
+//     projectionMatrix, width, height,
+//     timeMs, marks}}                      ──►  deck draws the host's own camera
+//                                               (matrixView.js), for a host that
+//                                               draws the map in place
 //   replay the frame                       ◄──  netgl:batch … frame-end {viewId}
 //   (sends the view again)                 ◄──  layer:invalidate (the map's data came)
 
@@ -33,9 +39,9 @@ export const MAP_HELLO = Object.freeze({
   capabilities: {
     kinds: ['map'],
     frames: ['ecef'],
-    // The views it honours: a globe camera, drawn full frame. RFC 0001's
-    // matrix views in ECEF (3D compositing) are a later step.
-    views: ['globe-camera'],
+    // The views it honours: a globe camera, drawn full frame, and RFC 0001's
+    // matrix views in ECEF, the host's own camera (matrixView.js).
+    views: ['globe-camera', 'matrix'],
     time: true,
     anchors: false,
     marks: true,
@@ -92,13 +98,22 @@ export function fitZoom(fit, height, lat = 0) {
   return Math.log2((r * height) / 256) + zoomAdjust(lat);
 }
 
+/** A matrix: 16 finite numbers. */
+const mat4 = (m) => (Array.isArray(m) && m.length === 16 && m.every((x) => typeof x === 'number' && Number.isFinite(x)) ? m.slice() : null);
+
 /**
- * A host's `layer:view` as deck's camera: { viewState, width, height,
- * timeMs, marks }, clamped to what deck's globe can draw; null if it isn't
- * a globe camera this page can honour.
+ * A host's `layer:view` as deck's camera, null if it isn't one this page
+ * can honour:
+ * - a globe camera: { kind: 'globe-camera', viewState, width, height,
+ *   timeMs, marks }, clamped to what deck's globe can draw;
+ * - a matrix view in ECEF: { kind: 'matrix', viewMatrix (ECEF metres → eye
+ *   metres, rigid, column-major), projectionMatrix, width, height, timeMs,
+ *   marks }; its zoom is the deck's view's (matrixView.js).
  */
 export function cameraOf(view) {
-  if (!view || typeof view !== 'object' || view.kind !== 'globe-camera') return null;
+  if (!view || typeof view !== 'object') return null;
+  if (view.kind === 'matrix') return matrixCameraOf(view);
+  if (view.kind !== 'globe-camera') return null;
   const width = num(view.width, 1, MAX_SIDE);
   const height = num(view.height, 1, MAX_SIDE);
   const lon = num(view.lon, -1e6, 1e6);
@@ -107,15 +122,8 @@ export function cameraOf(view) {
   const fit = num(view.fit, 0.05, 4);
   const zoom = num(view.zoom, -4, 20) ?? (fit !== null ? fitZoom(fit, Math.round(height), lat) : null);
   if (zoom === null) return null;
-  const marks = [];
-  for (const m of Array.isArray(view.marks) ? view.marks.slice(0, MAX_MARKS) : []) {
-    const mLon = num(m?.lon, -180, 180);
-    const mLat = num(m?.lat, -90, 90);
-    if (mLon === null || mLat === null) continue;
-    const rgb = Array.isArray(m.rgb) && m.rgb.length === 3 && m.rgb.every((c) => num(c, 0, 255) !== null) ? m.rgb.map(Math.round) : [255, 213, 74];
-    marks.push({ lon: mLon, lat: mLat, rgb });
-  }
   return {
+    kind: 'globe-camera',
     viewState: {
       longitude: ((((lon + 180) % 360) + 360) % 360) - 180,
       latitude: lat,
@@ -126,8 +134,40 @@ export function cameraOf(view) {
     width: Math.round(width),
     height: Math.round(height),
     timeMs: num(view.timeMs, -8.64e15, 8.64e15) ?? Date.now(),
-    marks,
+    marks: marksOf(view),
   };
+}
+
+function matrixCameraOf(view) {
+  if (view.frame !== 'ecef') return null;
+  const width = num(view.width, 1, MAX_SIDE);
+  const height = num(view.height, 1, MAX_SIDE);
+  const viewMatrix = mat4(view.viewMatrix);
+  const projectionMatrix = mat4(view.projectionMatrix);
+  if (width === null || height === null || !viewMatrix || !projectionMatrix) return null;
+  // A perspective: its x and y scales are the field; deck makes its own near and far.
+  if (!(projectionMatrix[0] > 0 && projectionMatrix[5] > 0 && projectionMatrix[11] === -1)) return null;
+  return {
+    kind: 'matrix',
+    viewMatrix,
+    projectionMatrix,
+    width: Math.round(width),
+    height: Math.round(height),
+    timeMs: num(view.timeMs, -8.64e15, 8.64e15) ?? Date.now(),
+    marks: marksOf(view),
+  };
+}
+
+function marksOf(view) {
+  const marks = [];
+  for (const m of Array.isArray(view.marks) ? view.marks.slice(0, MAX_MARKS) : []) {
+    const mLon = num(m?.lon, -180, 180);
+    const mLat = num(m?.lat, -90, 90);
+    if (mLon === null || mLat === null) continue;
+    const rgb = Array.isArray(m.rgb) && m.rgb.length === 3 && m.rgb.every((c) => num(c, 0, 255) !== null) ? m.rgb.map(Math.round) : [255, 213, 74];
+    marks.push({ lon: mLon, lat: mLat, rgb });
+  }
+  return marks;
 }
 
 /** The dataset map.html draws: `?data=`'s if listed, else the first AS-level one, else the first. */
