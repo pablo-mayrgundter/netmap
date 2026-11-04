@@ -20,7 +20,7 @@ import {
   altitudeOf, EDGE_LIFT, regionColours, makeEndReader, linkLengthFactors, routeLengthFactors, linkOpacity, nodeLook, nodeRadius, ADDITIVE,
 } from './globeScene.js';
 import { earthLayers } from './earth.js';
-import { MAP_HELLO, pickHostOrigin, cameraOf, pickDataset } from './mapView.js';
+import { MAP_HELLO, pickHostOrigin, cameraOf, partOf, pickDataset } from './mapView.js';
 import { MatrixView, cameraPlace, nearGraticule, curvatureDrop, GLOBE_MAX_ZOOM } from './matrixView.js';
 
 const DATA_BASE = new URL(import.meta.env.VITE_DATA_BASE || './data', document.baseURI).href.replace(/\/$/, '');
@@ -104,7 +104,8 @@ function start(host) {
 
   const earth = earthLayers();
   let net = null; // the map's data and the layers' fixed parts, once loaded
-  let latest = null; // the newest view: { viewId, cam }
+  // The newest view of each part ('' the host's main one): { viewId, part, cam }.
+  const latest = new Map();
   let size = [1, 1];
   let deckReady = false;
   let drawing = false; // inside draw(): deck may draw
@@ -123,7 +124,7 @@ function start(host) {
     onLoad: () => {
       if (LINEAR) withDepth(deck.deckRenderer);
       deckReady = true;
-      draw();
+      drawAll();
     },
     // deck draws only for a view (draw()). When it wants to redraw on its
     // own (a layer's data or shaders came in), the host is asked for the
@@ -148,43 +149,89 @@ function start(host) {
   // deck draws a post-process effect's input into framebuffers of its own,
   // with a colour attachment only: no depth, so nothing hides anything (the
   // globe's far side, links beyond the horizon). Give them depth.
+  // One pair for each size of view, so views of two sizes in turn (exo's
+  // ground and gate) don't reallocate them at each switch.
   function withDepth(renderer) {
     if (!renderer) return;
+    const bySize = new Map();
     renderer._resizeRenderBuffers = function resizeWithDepth(canvasContext = this.device.canvasContext) {
       const size = canvasContext.getDrawingBufferSize();
-      if (!this.renderBuffers.length) {
-        for (const i of [0, 1]) {
+      const key = size.join('x');
+      if (!bySize.has(key)) {
+        const pair = [0, 1].map((i) => {
           const texture = this.device.createTexture({ sampler: { minFilter: 'linear', magFilter: 'linear' }, width: size[0], height: size[1] });
-          this.renderBuffers.push(this.device.createFramebuffer({ id: `deck-renderbuffer-${i}`, colorAttachments: [texture], depthStencilAttachment: 'depth24plus' }));
+          const fb = this.device.createFramebuffer({ id: `deck-renderbuffer-${key}-${i}`, width: size[0], height: size[1], colorAttachments: [texture], depthStencilAttachment: 'depth24plus' });
+          fb.resize(size); // its depth attachment, made at the default size, to the colour's
+          return fb;
+        });
+        bySize.set(key, pair);
+        // Sizes no longer asked for (the host's window resized): the oldest go.
+        while (bySize.size > 3) {
+          const [old, gone] = bySize.entries().next().value;
+          bySize.delete(old);
+          for (const b of gone) b.destroy();
         }
       }
-      for (const buffer of this.renderBuffers) buffer.resize(size);
+      // deck's own (finalize) destroys what's in renderBuffers: keep the array, change what's in it.
+      this.renderBuffers.length = 0;
+      this.renderBuffers.push(...bySize.get(key));
     };
   }
 
   function resize(w, h) {
-    if (w === size[0] && h === size[1]) return;
-    size = [w, h];
-    canvas.style.width = `${w}px`;
-    canvas.style.height = `${h}px`;
+    if (w !== size[0] || h !== size[1]) {
+      size = [w, h];
+      canvas.style.width = `${w}px`;
+      canvas.style.height = `${h}px`;
+      canvas.width = w;
+      canvas.height = h;
+      deck.setProps({ width: w, height: h });
+    }
     // luma owns the drawing buffer's size (deck doesn't resize a context it
-    // was given), and its resize observer is too late for a frame drawn now.
-    deck.device.getDefaultCanvasContext().setDrawingBufferSize(w, h);
-    canvas.width = w;
-    canvas.height = h;
-    deck.setProps({ width: w, height: h });
+    // was given), and deck takes its own from luma's CSS size, which luma's
+    // resize observer sets: too late for a frame drawn now, and, with two
+    // views of different sizes in turn (exo's ground and gate), a view
+    // behind. Both are set here, for every view.
+    const ctx = deck.device.getDefaultCanvasContext();
+    ctx.setDrawingBufferSize(w, h);
+    ctx.cssWidth = w;
+    ctx.cssHeight = h;
+    deck._updateCanvasSize(ctx);
   }
 
-  function draw() {
-    if (!latest || !deckReady) return;
-    const { viewId, cam } = latest;
+  // Every part's layers, each part's under ids of its own, and all but this
+  // view's hidden: deck keeps a hidden layer's buffers, so a host that asks
+  // for two views in turn (exo's ground and gate) doesn't have them made
+  // again at each switch: the land and ocean tessellated for the globe or
+  // the flat map, the network's positions lowered for the flat map or not.
+  function partLayers(v) {
+    const out = [];
+    for (const [key, p] of latest) {
+      const shown = p === v;
+      for (const l of [...earth, ...nearGridLayers(p.cam), ...networkLayers(p.cam), ...markLayers(p.cam)]) {
+        out.push(l.clone({ id: `${key || 'main'}:${l.id}`, visible: shown && l.props.visible !== false }));
+      }
+    }
+    return out;
+  }
+
+  /** Every part's newest view again, the main one last (what a host waits on). */
+  function drawAll() {
+    for (const [key, v] of latest) if (key) draw(v);
+    if (latest.has('')) draw(latest.get(''));
+  }
+
+  /** One view, as one frame, tagged with its part. */
+  function draw(v) {
+    if (!v || !deckReady) return;
+    const { viewId, part, cam } = v;
     resize(cam.width, cam.height);
     const t0 = performance.now();
     const matrix = cam.kind === 'matrix';
     deck.setProps({
       views: matrix ? matrixView : globeView,
       viewState: matrix ? { viewMatrix: cam.viewMatrix, projectionMatrix: cam.projectionMatrix } : cam.viewState,
-      layers: [...earth, ...nearGridLayers(cam), ...networkLayers(cam), ...markLayers(cam)],
+      layers: partLayers(v),
     });
     asked = false;
     drawing = true;
@@ -201,7 +248,7 @@ function start(host) {
     } finally {
       drawing = false;
     }
-    core.endFrame({ viewId });
+    core.endFrame(part ? { viewId, part } : { viewId });
     stats.frames += 1;
     const ms = performance.now() - t0;
     stats.drawMs.push(ms);
@@ -480,8 +527,10 @@ function start(host) {
       const cam = cameraOf(msg.view);
       if (!cam) return console.warn('[map] not a view this page draws:', msg.view?.kind);
       stats.views += 1;
-      latest = { viewId: msg.viewId, cam };
-      draw();
+      const part = partOf(msg);
+      const v = { viewId: msg.viewId, part, cam };
+      latest.set(part ?? '', v);
+      draw(v);
     } else if (msg?.type === 'layer:dispose') {
       deck.finalize();
       stats.status = 'disposed';
@@ -495,7 +544,7 @@ function start(host) {
       status('ready');
       // The map's data came: ask the host for its view again, to draw it.
       transport.post({ type: 'layer:invalidate', reason: 'data' });
-      draw();
+      drawAll();
     },
     (e) => {
       // The globe still draws, without the network on it.
