@@ -1,0 +1,14 @@
+"id","ident","type","name","latitude_deg","longitude_deg","elevation_ft","continent","iso_country","iso_region","municipality","scheduled_service","icao_code","iata_code","gps_code","local_code","home_link","wikipedia_link","keywords"
+1,"KLAX","large_airport","Los Angeles International Airport",33.942501,-118.407997,125,"NA","US","US-CA","Los Angeles","yes","KLAX","LAX","KLAX","LAX",,,
+2,"XLAX","closed","Old Lax Field",34.0,-118.0,0,"NA","US","US-CA","Los Angeles","no",,"LAX",,,,,
+3,"KLAS","large_airport","Harry Reid International Airport",36.083361,-115.151817,2181,"NA","US","US-NV","Las Vegas","yes","KLAS","LAS","KLAS","LAS",,,
+4,"KATL","large_airport","Hartsfield Jackson Atlanta International Airport",33.6367,-84.428101,1026,"NA","US","US-GA","Atlanta","yes","KATL","ATL","KATL","ATL",,,
+5,"WIII","large_airport","Soekarno-Hatta International Airport",-6.1256,106.655998,34,"AS","ID","ID-BT","Jakarta","yes","WIII","CGK","WIII",,,,
+6,"KSEA","large_airport","Seattle Tacoma International Airport",47.449162,-122.311134,433,"NA","US","US-WA","Seattle","yes","KSEA","SEA","KSEA","SEA",,,
+7,"KDFW","large_airport","Dallas Fort Worth International Airport",32.896801,-97.038002,607,"NA","US","US-TX","Dallas-Fort Worth","yes","KDFW","DFW","KDFW","DFW",,,
+8,"KAUS","large_airport","Austin Bergstrom International Airport",30.194499,-97.669899,542,"NA","US","US-TX","Austin","yes","KAUS","AUS","KAUS","AUS",,,
+9,"CYYC","large_airport","Calgary International Airport",51.113899,-114.019997,3557,"NA","CA","CA-AB","Calgary","yes","CYYC","YYC","CYYC","YYC",,,
+10,"CYFB","medium_airport","Iqaluit Airport",63.756402,-68.555801,110,"NA","CA","CA-NU","Iqaluit","yes","CYFB","YFB","CYFB","YFB",,,
+11,"CYRT","medium_airport","Rankin Inlet Airport",62.811401,-92.115799,94,"NA","CA","CA-NU","Rankin Inlet","yes","CYRT","YRT","CYRT","YRT",,,
+12,"TJSJ","large_airport","Luis Munoz Marin International Airport",18.4394,-66.001801,9,"NA","PR","PR-U-A","San Juan","yes","TJSJ","SJU","TJSJ","SJU",,,"Carolina"
+13,"KMIA","large_airport","Miami International Airport",25.79319953918457,-80.29060363769531,8,"NA","US","US-FL","Miami","yes","KMIA","MIA","KMIA","MIA",,,

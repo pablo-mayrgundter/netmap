@@ -1,6 +1,7 @@
 import bz2
 import gzip
 import json
+from pathlib import Path
 
 import igraph as ig
 import numpy as np
@@ -464,3 +465,122 @@ def test_hybrid_grows_opte_families_around_pins():
     km = 111 * np.hypot((lon[leaf] - glon[owner[leaf]]) * np.cos(np.radians(glat[owner[leaf]])),
                         lat[leaf] - glat[owner[leaf]])
     assert 20 < np.median(km) < 500, np.median(km)
+
+
+STARLINK_FX = Path(__file__).parent / "fixtures" / "starlink"
+
+
+def _starlink_run(tmp_path, *extra):
+    from netmap import cli
+
+    out = tmp_path / "data" / "starlink"
+    cli.main(["--cache", str(tmp_path / "raw"), "starlink", "--out", str(out),
+              "--feed", str(STARLINK_FX / "feed.csv"), "--pops", str(STARLINK_FX / "pops.csv"),
+              "--ourairports", str(STARLINK_FX), *extra])
+    return out, {f: json.loads((out / f"{f}.json").read_text())
+                 for f in ("pops", "prefixes", "regions", "meta")}
+
+
+def test_starlink_pops_prefixes_regions(tmp_path):
+    out, d = _starlink_run(tmp_path, "--previous", "none")
+    pops = {p["code"]: p for p in d["pops"]}
+    assert [p["code"] for p in d["pops"]] == sorted(pops)
+    la = pops["lsancax1"]
+    # The open large airport wins over a closed field with the same code.
+    assert (la["airport"], la["located"], la["lat"], la["country"]) == ("LAX", "iata", 33.9425, "US")
+    assert (la["v4_prefixes"], la["v6_prefixes"], la["v4_addresses"]) == (3, 1, 640)
+    assert [(r["city"], r["prefixes"]) for r in la["regions"]] == [("Los Angeles", 3), ("Las Vegas", 1)]
+    assert (pops["atlagax3"]["airport"], pops["atlagax3"]["city"]) == ("ATL", "Atlanta")  # atl2
+    assert (pops["jtnaidn2"]["airport"], pops["jtnaidn2"]["located"]) == ("CGK", "metro")  # jkt
+    assert pops["kentwax2"]["lat"] is None and pops["kentwax2"]["located"] is None
+    m = d["meta"]
+    assert m["unmatched"]["iata"] == [{"code": "kentwax2", "iata": "staging2", "prefixes": 1}]
+    assert m["counts"]["pops"] == 7 and m["counts"]["pops_located"] == 6
+    assert m["counts"]["prefixes"] == 13 and m["counts"]["v6_prefixes"] == 2
+    assert m["counts"]["feed_prefixes_without_pop"] == 2 and m["sources"]["pops"]["skipped"] == 1
+    assert len(m["sources"]["feed"]["sha256"]) == 64 and m["diff"] is None
+
+    # prefixes.json: columns of one length, indices into its own (and the other files') lists.
+    px = d["prefixes"]
+    n = len(px["prefix"])
+    assert len(px["pop"]) == n == len(px["region"]) == 13
+    assert px["pops"] == [p["code"] for p in d["pops"]]
+    assert px["regions"] == [[r["country"], r["region"], r["city"]] for r in d["regions"]]
+    k = px["prefix"].index("9.170.2.0/25")
+    assert px["pops"][px["pop"][k]] == "lsancax1" and px["regions"][px["region"][k]][2] == "Las Vegas"
+    assert px["pop"][px["prefix"].index("143.105.1.0/24")] == -1
+    assert px["prefix"][0].startswith("9.") and ":" in px["prefix"][-1]  # v4 sorted, then v6
+
+    regs = {r["city"]: r for r in d["regions"]}
+    assert regs["Los Angeles"]["precision"] == "city" and regs["Los Angeles"]["region_name"] == "California"
+    assert regs["San Juan"]["precision"] == "city"  # no region code: matched in the country
+    assert regs["Starbase"]["precision"] == "region"  # Texas: between DFW and AUS
+    assert 30 < regs["Starbase"]["lat"] < 33 and regs["Meliadine"]["precision"] == "region"
+    assert regs["Adamstown"]["lat"] is None
+    assert m["unmatched"]["regions"] == [{"country": "PN", "region": "", "city": "Adamstown"}]
+    assert regs["Los Angeles"]["pops"] == [{"pop": px["pops"].index("lsancax1"), "code": "lsancax1",
+                                            "prefixes": 3}]
+    assert regs["Adamstown"]["no_pop_prefixes"] == 1
+    assert set(m["files"]) == {"pops.json", "prefixes.json", "regions.json"}
+
+
+def test_starlink_diff_against_previous(tmp_path):
+    _, d = _starlink_run(tmp_path, "--previous", str(STARLINK_FX / "prev-pops.csv"),
+                         "--previous-feed", str(STARLINK_FX / "prev-feed.csv"))
+    df = d["meta"]["diff"]
+    assert d["meta"]["diff_error"] is None
+    assert df["pops_added"] == ["atlagax3", "kentwax2"] and df["pops_removed"] == ["mmmiflx1"]
+    assert df["moved"] == [["9.170.2.0/25", "dllstxx1", "lsancax1"], ["98.97.1.0/24", "atlagax1", "atlagax3"]]
+    assert df["prefixes_moved"] == 2 and not df["moved_truncated"]
+    assert {(m["from"], m["to"]) for m in df["moves"]} == {("dllstxx1", "lsancax1"), ("atlagax1", "atlagax3")}
+    assert (df["prefixes_assigned"], df["prefixes_unassigned"]) == (3, 1)
+    assert df["feed"] == {"prefixes_added": 4, "prefixes_removed": 0, "prefixes_relocated": 1}
+    assert df["previous"]["pops"]["sha256"] and df["previous"]["feed"]["bytes"] > 0
+
+
+def test_starlink_snapshot_choice(monkeypatch):
+    from datetime import datetime, timezone
+
+    from netmap import starlink
+
+    names = ["pop/202610/pops-20261006-1802.csv", "pop/202610/pops-20261008-1518.csv",
+             "pop/202609/pops-20260930-0100.csv", "pop/202610/README.md"]
+    seen = []
+    monkeypatch.setattr(starlink, "list_history", lambda months: seen.extend(months) or names)
+    now = datetime(2026, 11, 7, 12, tzinfo=timezone.utc)
+    path, ts = starlink.find_previous(now, 30)
+    assert path == "pop/202610/pops-20261006-1802.csv" and ts.day == 6
+    assert seen == ["202610", "202609", "202608"]
+
+
+def test_update_index_skips_non_bundles(tmp_path):
+    from netmap import cli
+
+    out, _ = _bundle(tmp_path)
+    _starlink_run(tmp_path, "--previous", "none")
+    (tmp_path / "data" / "b").mkdir(parents=True)
+    for f in out.iterdir():
+        if f.is_file():
+            (tmp_path / "data" / "b" / f.name).write_bytes(f.read_bytes())
+    cli._update_index(tmp_path / "data")
+    assert [d["id"] for d in json.loads((tmp_path / "data" / "datasets.json").read_text())] == ["b"]
+
+
+def test_resite_as_at_its_pops():
+    from netmap import starlink
+
+    pfx, g = _prefix_and_geo()
+    p = geo.profile_ases(pfx, g)
+    pops = [
+        {"code": "a", "lat": 34.0, "lon": -118.4, "v4_addresses": 600, "city": "Los Angeles", "country": "US"},
+        {"code": "b", "lat": 33.7, "lon": -117.9, "v4_addresses": 200, "city": "Irvine", "country": "US"},
+        {"code": "c", "lat": 50.1, "lon": 8.6, "v4_addresses": 200, "city": "Frankfurt", "country": "DE"},
+        {"code": "d", "lat": None, "lon": None, "v4_addresses": 999, "city": None, "country": None},
+    ]
+    assert geo.resite(p, 1, starlink.as_sites(pops))
+    i = p.index()[1]
+    assert p.country[i] == "US" and p.addrs[i] == 1000  # address space stays RouteViews'
+    assert p.concentration[i] == pytest.approx(0.8)
+    assert p.lat[i] == pytest.approx(34.0) and p.lon[i] == pytest.approx(-118.4)  # LA's 1° cell
+    assert [s[3] for s in p.sites[i]] == ["Los Angeles", "Irvine", "Frankfurt"]
+    assert not geo.resite(p, 999, starlink.as_sites(pops))

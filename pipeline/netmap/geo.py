@@ -269,3 +269,36 @@ def prefixes_by_as(pfx: PrefixTable, limit: int = 48) -> dict[int, list[str]]:
     for asn, lst in out.items():
         del lst[limit:]
     return out
+
+
+def resite(prof: AsProfile, asn: int, sites, top_sites: int = 32) -> bool:
+    """Replace one AS's geography with known sites, e.g. its PoPs.
+
+    ``sites`` is ``[(lat, lon, weight, city, country)]``, weighted by address
+    space. The main site, concentration, country and top sites are worked out
+    as in ``profile_ases``; address counts are left alone. False if the AS
+    isn't in the profile or no site has weight.
+    """
+    i = int(np.searchsorted(prof.asns, asn))
+    sites = [s for s in sites if s[2] > 0]
+    if i >= len(prof.asns) or int(prof.asns[i]) != asn or not sites:
+        return False
+    lat = np.array([s[0] for s in sites], np.float64)
+    lon = np.array([s[1] for s in sites], np.float64)
+    w = np.array([s[2] for s in sites], np.float64)
+    share = w / w.sum()
+    cell = np.floor(lat + 90).astype(np.int64) * 360 + np.floor(lon + 180).astype(np.int64)
+    ucell, inv = np.unique(cell, return_inverse=True)
+    best = np.bincount(inv, weights=w).argmax()
+    m = inv == best
+    clat, clon = float(np.average(lat[m], weights=w[m])), float(np.average(lon[m], weights=w[m]))
+    prof.lat[i], prof.lon[i], prof.has_geo[i] = clat, clon, True
+    prof.concentration[i] = float(share[haversine_km(lat, lon, clat, clon) <= SITE_RADIUS_KM].sum())
+    cw: dict[str, float] = {}
+    for s, x in zip(sites, share):
+        cw[s[4]] = cw.get(s[4], 0.0) + x
+    prof.country[i] = max(cw, key=cw.get)
+    order = np.argsort(-share, kind="stable")[:top_sites]
+    prof.sites[i] = [(round(float(lat[k]), 4), round(float(lon[k]), 4), round(float(share[k]), 4),
+                      sites[k][3]) for k in order]
+    return True

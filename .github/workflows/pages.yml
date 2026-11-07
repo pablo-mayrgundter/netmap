@@ -51,6 +51,13 @@ jobs:
           path: data/raw/itdk-*
           key: itdk-v1
       - run: pip install -e "pipeline[itdk]"
+      # Starlink's own geofeeds (web/public/data/starlink/), first so the map
+      # build sites AS14593 at its PoPs. The token is for listing the archive
+      # the diff's previous snapshot comes from.
+      - name: Starlink PoPs and prefixes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python -m netmap starlink
       - name: Build CAIDA map bundles
         run: |
           python -m netmap build --topology caida --name internet
