@@ -5,12 +5,14 @@
 
 import { esc, fmt } from '../util.js';
 import { STARLINK_ASN, starlinkSummary } from './summary.js';
+import { SECTIONS } from './sections.js';
 
 let ctx = null;
 let root = null;
 let info = null; // AS14593's details record, once fetched
 let infoFor = null; // the dataset it's for
 let aboutOpen = true;
+let mounted = []; // the sections mounted (sections.js), each with its element
 
 function render() {
   if (!root) return;
@@ -100,19 +102,39 @@ function wireAbout() {
 
 export function mount(el, c) {
   ctx = c;
-  root = el;
+  root = el.appendChild(document.createElement('div'));
   info = infoFor = null;
   aboutOpen = ctx.hash.get('about') !== '0';
   ctx.on('dataset', render);
   render();
+  mounted = SECTIONS.map((s) => {
+    const sel = el.appendChild(document.createElement('section'));
+    sel.dataset.section = s.id;
+    try {
+      s.mount(sel, ctx);
+    } catch (err) {
+      sel.innerHTML = `<p class="app-warn">${esc(s.id)} didn't load (${esc(err.message)}).</p>`;
+    }
+    return { s, el: sel };
+  });
 }
 
 export function unmount() {
-  if (root) root.innerHTML = '';
+  for (const { s, el } of mounted) {
+    try {
+      s.unmount();
+    } catch {
+      /* the next section still unmounts */
+    }
+    el.remove();
+  }
+  mounted = [];
+  if (root) root.remove();
   ctx = root = info = infoFor = null;
 }
 
 export function onHash(params) {
+  for (const { s } of mounted) s.onHash?.(params);
   const open = params.about !== '0';
   if (open === aboutOpen) return;
   aboutOpen = open;
