@@ -94,7 +94,7 @@ test('the serving satellite is held for its 15 s slot, then re-picked', () => {
   assert.equal(p.rule, 'pinned');
 });
 
-test('mid-ocean: satellites in view, none sees a gateway', () => {
+test('mid-ocean without the mesh: satellites in view, none sees a gateway', () => {
   const m = new LinkModel({ omm: OMM, gateways: GATEWAYS, pops: POPS });
   m.propagate(T0);
   m.gatewayViews();
@@ -104,4 +104,72 @@ test('mid-ocean: satellites in view, none sees a gateway', () => {
   assert.equal(d.serving.rule, 'no-gateway');
   assert.equal(d.exit, null);
   assert.equal(d.latency, null);
+});
+
+test('mid-ocean over the lasers: hops to a satellite that sees a gateway, then down; fibre compared', () => {
+  const m = new LinkModel({ omm: OMM, gateways: GATEWAYS, pops: POPS });
+  m.propagate(T0);
+  m.gatewayViews();
+  m.mesh();
+  m.route();
+  assert.ok(m.summary().linksUp > 3000, `${m.summary().linksUp}`);
+  const d = m.dish(-125, 30, { dest: 1 }); // off California, ~1,500+ km from Kansas City
+  assert.equal(d.serving.rule, 'laser');
+  assert.ok(d.route.hops >= 1);
+  const last = d.route.sats[d.route.sats.length - 1];
+  assert.ok(last.terminal && d.exit.sat.norad === last.norad);
+  assert.ok(['us-kc', 'us-merrillan'].includes(d.exit.id));
+  const L = d.latency;
+  assert.ok(L.isl > 0 && Math.abs(L.isl - vacuumMs(d.route.km)) < 1e-6);
+  assert.ok(Math.abs(L.total - (L.up + L.isl + L.down + L.backhaul)) < 1e-9);
+  // The route is the cheapest in view: no other satellite in view has a cheaper laser path.
+  for (const v of d.visible) assert.ok(m.laserCost(v) >= m.laserCost(d.visible.find((x) => x.i === d.serving.i)) - 1e-9);
+  // Fibre along the great circle to the PoP, and to Chicago through space and on.
+  assert.ok(Math.abs(d.fibre.pop.ms - fibreMs(gcKm(-125, 30, d.exit.popLon, d.exit.popLat))) < 1e-9);
+  assert.equal(d.fibre.dest.code, 'chcoilx1');
+  assert.ok(Math.abs(d.fibre.dest.viaMs - (L.total + fibreMs(d.fibre.dest.onwardKm))) < 1e-9);
+});
+
+test('traffic: demand from regions, along the routes, into gateway shares', () => {
+  const regions = [
+    { id: 0, city: 'Wichita', lat: 37.69, lon: -97.34, v4_addresses: 4096 },
+    { id: 1, city: 'Off California', lat: 30, lon: -125, v4_addresses: 1024 },
+    { id: 2, city: 'South Pacific', lat: -50, lon: -120, v4_addresses: 256 },
+  ];
+  const m = new LinkModel({ omm: OMM, gateways: GATEWAYS, pops: POPS, regions });
+  m.propagate(T0);
+  m.gatewayViews();
+  m.mesh();
+  m.route();
+  const tr = m.assign();
+  assert.equal(tr.total, 4096 + 1024 + 256);
+  assert.equal(tr.bent, 4096);
+  assert.equal(tr.laser + tr.unserved, 1024 + 256);
+  assert.ok(tr.laser >= 1024);
+  assert.equal([...tr.gateway].reduce((a, b) => a + b, 0), tr.bent + tr.laser);
+  const lines = m.trafficLines(tr);
+  assert.ok(lines.links.n >= 1 && Math.max(...lines.links.load) === 1);
+  assert.ok(lines.gateways[0].share > 0.5 && lines.gateways[0].rel === 1);
+  // Assigned once a slot: the same object within it.
+  assert.equal(m.assign(), tr);
+});
+
+test("checkAnchors: the model's satellites against the Orbits layer's anchors", async () => {
+  const { checkAnchors } = await import('./core.js');
+  const { temeAt, temeToEcef } = await import('./orbit.js');
+  const m = new LinkModel({ omm: OMM.slice(0, 30), gateways: [], pops: [] });
+  const t = T0 + 5000;
+  // Anchors where SGP4 puts two satellites (on a sphere, as celestiary gives them), one moved 0.1° east.
+  const at = (k, dLon = 0) => {
+    const p = temeToEcef(temeAt(m.sats[k], t).position, t);
+    const r = Math.hypot(...p);
+    return { id: `norad:${m.sats[k].norad}`, lon: (Math.atan2(p[1], p[0]) * 180) / Math.PI + dLon, lat: (Math.asin(p[2] / r) * 180) / Math.PI };
+  };
+  const ok = checkAnchors(m, { t, anchors: [at(0), at(1)] });
+  assert.equal(ok.n, 2);
+  assert.ok(ok.maxKm < 0.01, `${ok.maxKm}`);
+  const off = checkAnchors(m, { t, anchors: [at(0), at(1, 0.1), { id: 'norad:1', lon: 0, lat: 0 }] });
+  assert.equal(off.n, 2);
+  assert.ok(off.maxKm > 5 && off.maxKm < 13, `${off.maxKm}`);
+  assert.equal(checkAnchors(m, { t, anchors: [] }), null);
 });

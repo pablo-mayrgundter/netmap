@@ -93,8 +93,7 @@ function aboutHTML() {
       <p><b>Modelled.</b> Routing in space is below the IP layer and isn't public: the laser links between
         satellites are modelled from SpaceX's FCC filings, and gateway sites come from FCC earth-station
         filings. Anything modelled will say so.</p>
-      <p class="muted">Coming next here: a live BGP looking glass, RIPE Atlas probes, and the modelled
-        laser mesh between satellites.</p>
+      <p class="muted">Coming next here: a live BGP looking glass and RIPE Atlas probes.</p>
     </details>`;
 }
 

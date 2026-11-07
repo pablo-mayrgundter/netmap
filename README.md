@@ -176,9 +176,21 @@ map, with each leg's slant range and light time. Satellite positions are
 SGP4 from CelesTrak's elements (the snapshot celestiary's Orbits layer
 draws, so the two agree), propagated in a Web Worker once a second on
 netmap's clock; the serving satellite is the highest one in view that also
-sees a gateway, held for the scheduler's 15 s slot. `starlink.sat=<norad>`
-selects a satellite. The section's "How this is modelled" lists the
-assumptions and sources (`web/src/apps/starlink/links/`).
+sees a gateway, held for the scheduler's 15 s slot. Where none does (mid-ocean,
+or far from the gateways known), the traffic crosses the **laser mesh**: a
++Grid per shell among the satellites launched with lasers (from Group 2-1,
+September 2021), two links in the plane and one to the nearest satellite in
+each neighbouring plane, up to 5,000 km and clear of the Earth by 80 km,
+rebuilt every 15 s, and Dijkstra finds the shortest path in light time to a
+satellite that sees a gateway. The panel shows the hops and the latency
+against fibre along the great circle (c/1.47), to the PoP and to a
+destination PoP (`starlink.dest=<code>`). `starlink.layer` also takes `mesh`
+(drawn round the camera on the globe) and `traffic`, an **estimate**: each of
+the geofeed's customer regions, weighted by its IPv4 addresses, served and
+routed by the same rules, summed into the load on each laser link, feeder
+link and gateway and drawn as a heat map. No measured traffic data is public.
+`starlink.sat=<norad>` selects a satellite. The section's "How this is
+modelled" lists the assumptions and sources (`web/src/apps/starlink/links/`).
 More panels are coming (#28). How to write an app, and the `ctx`
 interface apps build on, are in [`web/src/apps/README.md`](web/src/apps/README.md).
 
