@@ -1,0 +1,44 @@
+[
+ {
+  "id": "internet",
+  "name": "internet",
+  "synthetic": false,
+  "kind": "as",
+  "counts": {
+   "nodes": 81623,
+   "edges": 680178,
+   "p2c": 171391,
+   "p2p": 508787,
+   "geolocated": 78089,
+   "pinned": 903,
+   "backbone": 109583,
+   "pops": 32216,
+   "routes": 25001
+  },
+  "generated": "2026-11-07T02:03:55+00:00",
+  "tiles": [
+   "cyber",
+   "geo",
+   "hybrid"
+  ]
+ },
+ {
+  "id": "routers",
+  "name": "routers",
+  "synthetic": false,
+  "kind": "routers",
+  "counts": {
+   "nodes": 148673,
+   "edges": 680213,
+   "p2c": 116145,
+   "p2p": 260245,
+   "geolocated": 148673,
+   "pinned": 2091,
+   "backbone": 148321,
+   "pops": 0,
+   "routes": 0
+  },
+  "generated": "2026-11-07T02:05:36+00:00",
+  "tiles": []
+ }
+]
