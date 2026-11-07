@@ -1,4 +1,4 @@
-"""Command line: ``netmap fetch | build | tiles | serve-tiles``."""
+"""Command line: ``netmap fetch | build | build-itdk | starlink | tiles | serve-tiles``."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import asrel, export, geo, layout, metrics, pops, sources, synthetic, tiles
+from . import asrel, export, geo, layout, metrics, pops, sources, starlink, synthetic, tiles
 from .regions import REGIONS, region_of
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -58,6 +58,14 @@ def cmd_build(args):
     gt = geo.load_geo(geo_path, cache / "parsed")
     _step("profiling AS address space and geography")
     prof = geo.profile_ases(pfx, gt)
+    sl = Path(args.starlink_pops) if args.starlink_pops else Path(args.out) / "starlink" / "pops.json"
+    if args.starlink_pops != "none" and sl.exists():
+        import json
+
+        if geo.resite(prof, starlink.ASN, starlink.as_sites(json.loads(sl.read_text()))):
+            _step(f"  AS{starlink.ASN} sited at its PoPs from {sl}")
+            attribution.append(f"AS{starlink.ASN} sites: Starlink PoP list (geoip.starlinkisp.net), "
+                               "airports from OurAirports (public domain)")
 
     orgs: dict[int, asrel.OrgInfo] = {}
     if args.topology == "synthetic":
@@ -299,12 +307,29 @@ def _update_index(root: Path):
 
     items = []
     for p in sorted(root.glob("*/meta.json")):
+        if not (p.parent / "graph.bin").exists():  # not a map bundle (e.g. starlink/)
+            continue
         mt = json.loads(p.read_text())
         items.append({"id": p.parent.name, "name": mt["name"], "synthetic": mt["synthetic"],
                       "kind": mt.get("kind", "as"),
                       "counts": mt["counts"], "generated": mt["generated"],
                       "tiles": sorted(d.name for d in (p.parent / "tiles").glob("*") if d.is_dir())})
     (root / "datasets.json").write_text(json.dumps(items, indent=1))
+
+
+def cmd_starlink(args):
+    """Starlink PoPs, customer prefixes and regions from its geofeeds."""
+    t0 = time.time()
+    out = Path(args.out)
+    _step(f"Starlink feeds -> {out}")
+    meta = starlink.run(out, Path(args.cache), feed=args.feed, pops=args.pops,
+                        ourairports=args.ourairports, previous=args.previous,
+                        previous_feed=args.previous_feed, previous_days=args.previous_days,
+                        refresh=args.refresh, log=_step)
+    um = [f"{u['code']} ({u['iata']})" for u in meta["unmatched"]["iata"]]
+    if um:
+        _step(f"  PoPs with unknown IATA codes (no location): {', '.join(um)}")
+    _step(f"done in {time.time() - t0:.0f}s: {meta['files']}")
 
 
 def cmd_tiles(args):
@@ -355,6 +380,9 @@ def main(argv=None):
                    help="hybrid: pin geolocated nodes with at least this many layout links; LGL places the rest")
     b.add_argument("--no-prefixes", dest="prefixes", action="store_false",
                    help="omit per-AS prefix lists from info records")
+    b.add_argument("--starlink-pops",
+                   help="site AS14593 at its PoPs from this pops.json (default <out>/starlink/pops.json "
+                        "if it exists, from `netmap starlink`; 'none' keeps DB-IP's sites)")
     b.add_argument("--seed", type=int, default=7)
     b.add_argument("--synthetic-scale", type=float, default=1.0, help="peering density for synthetic")
     b.set_defaults(fn=cmd_build)
@@ -373,6 +401,21 @@ def main(argv=None):
                    help="hybrid: pin geolocated nodes with at least this many layout links; LGL places the rest")
     r.add_argument("--seed", type=int, default=7)
     r.set_defaults(fn=cmd_build_itdk)
+
+    sl = sub.add_parser("starlink", help="Starlink PoPs, prefixes and regions from its geofeeds")
+    sl.add_argument("--out", default=str(DEFAULT_OUT / "starlink"))
+    sl.add_argument("--cache", default=argparse.SUPPRESS, help="raw data cache dir")
+    sl.add_argument("--feed", default=starlink.FEED_URL, help="RFC 8805 geofeed: URL or local file")
+    sl.add_argument("--pops", default=starlink.POPS_URL, help="prefix,popcode,iata: URL or local file")
+    sl.add_argument("--ourairports", default=starlink.OURAIRPORTS,
+                    help="base URL or local dir with OurAirports' airports.csv, regions.csv, countries.csv")
+    sl.add_argument("--previous", default="auto",
+                    help="pops.csv to diff against: 'auto' (clarkzjw/starlink-geoip-data's newest "
+                         "snapshot at least --previous-days old), 'none', or a URL or file")
+    sl.add_argument("--previous-feed", help="feed.csv from the same time as --previous (URL or file)")
+    sl.add_argument("--previous-days", type=int, default=30)
+    sl.add_argument("--refresh", action="store_true", help="re-download today's feeds")
+    sl.set_defaults(fn=cmd_starlink)
 
     t = sub.add_parser("tiles", help="pre-render raster XYZ tiles for a bundle")
     t.add_argument("bundle")
