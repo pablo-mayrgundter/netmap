@@ -191,7 +191,7 @@ function tick() {
 // to AS14593, to check the model's positions against.
 function orbitsCheck() {
   if (!ctx.orbits.active()) return null;
-  const anchors = ctx.orbits.starlinkLinks().map((a) => ({ id: a.id, lon: a.lon, lat: a.lat }));
+  const anchors = ctx.orbits.starlinkLinks().map((a) => ({ id: a.id, lon: a.lon, lat: a.lat, altKm: a.altKm }));
   const t = ctx.orbits.time();
   return anchors.length && t ? { t, anchors } : null;
 }
@@ -407,7 +407,7 @@ function satHTML(s, title) {
   return `
     <div class="sl-sat">
       <h4>${title}: ${satButton(s)}</h4>
-      <p class="muted sl-small">${esc(s.cospar)} · ${s.shell ? esc(s.shell) : 'not in a shell in service (raising, lowering or drifting)'} · lasers: ${s.laser ? 'yes' : `no (launched before ${LASER_CUTOFF.date})`} · ${fmtLatLon(s.lat, s.lon, 1)}, ${fmtKm(s.alt / 1000)} up · sees ${fmt(s.gateways?.length ?? 0)} gateways</p>
+      <p class="muted sl-small">${esc(s.cospar)} · ${s.shell ? esc(s.shell) : 'not in a shell in service (raising, lowering or drifting)'} · lasers: ${s.laser ? 'yes' : `no (launched before ${LASER_CUTOFF.date})`} · ${fmtLatLon(s.lat, s.lon, 1)} (geocentric), ${fmtKm(s.height)} up · sees ${fmt(s.gateways?.length ?? 0)} gateways</p>
       <div class="app-actions"><button type="button" class="btn" data-unsat>Clear</button></div>
     </div>`;
 }
@@ -491,7 +491,7 @@ function elementsHTML() {
     ? ` · per tick${st.engine?.inWorker ? ', in a worker' : ''}: ${fmtMs(t.propagate)} to propagate, ${fmtMs(t.gateways)} for the gateways' views${Number.isFinite(t.route) ? `, ${fmtMs(t.meshRefresh)} for the mesh and ${fmtMs(t.route)} to route; every 15 s, ${fmtMs(t.meshBuild)} to rebuild the mesh${Number.isFinite(t.traffic) ? ` and ${fmtMs(t.traffic)} to assign the traffic` : ''}` : ''}`
     : '';
   const ck = st.result?.check;
-  const check = ck ? ` The Orbits layer's ${fmt(ck.n)} linked Starlink satellites are within ${fmtKm(ck.maxKm)} of the model's.` : '';
+  const check = ck ? ` The Orbits layer draws its ${fmt(ck.n)} linked Starlink satellites within ${fmtKm(ck.maxKm)} of the model's.` : '';
   return `Elements: ${esc(e.source.label)}, fetched ${esc(String(e.fetched).slice(0, 10))}; newest epoch ${e.epochs ? fmtAge(age - e.epochs.max) : '—'} before the model's time, median ${e.epochs ? fmtAge(age - e.epochs.median) : '—'}${s ? `. ${fmt(s.sats)} satellites, ${fmt(s.operational)} in ${s.shells.filter((x) => x.inService).length} shells in service (${s.shells.filter((x) => x.inService).map((x) => esc(x.label)).join(', ')}), ${fmt(s.laser)} with lasers` : ''}${perf}.${check}`;
 }
 

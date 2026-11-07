@@ -175,7 +175,10 @@ up to the satellite on the globe, through the sub-satellite point on the 2D
 map, with each leg's slant range and light time. Satellite positions are
 SGP4 from CelesTrak's elements (the snapshot celestiary's Orbits layer
 draws, so the two agree), propagated in a Web Worker once a second on
-netmap's clock, or at the Orbits layer's frame time while it's on; the serving satellite is the highest one in view that also
+netmap's clock, or at the Orbits layer's frame time while it's on, and drawn
+at their true positions on deck's globe (geocentric, as the Orbits layer
+draws them; not WGS84 latitude and height, which would put them up to 21 km
+off); the serving satellite is the highest one in view that also
 sees a gateway, held for the scheduler's 15 s slot. Where none does (mid-ocean,
 or far from the gateways known), the traffic crosses the **laser mesh**: a
 +Grid per shell among the satellites launched with lasers (from Group 2-1,

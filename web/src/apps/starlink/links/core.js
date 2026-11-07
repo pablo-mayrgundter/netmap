@@ -5,28 +5,29 @@
 // directly.
 
 import { LinkModel } from './model.js';
-import { temeAt, temeToEcef } from './orbit.js';
+import { ecefToGlobe, globeToEcef, temeAt, temeToEcef } from './orbit.js';
 
 /**
- * How far the model's satellites are from where celestiary's Orbits layer
- * drew them: `anchors` [{ id: 'norad:<n>', lon, lat }] at `t`. The angle
- * between the two directions, times the model's radius: km on the sky,
- * mostly along the track (the layer's anchors are spherical, so altitude
- * isn't compared). Returns { n, maxKm, meanKm } or null.
+ * How far the model's satellites are drawn from where celestiary's Orbits
+ * layer draws them: `anchors` [{ id: 'norad:<n>', lon, lat, altKm }] at `t`,
+ * as ctx.orbits gives them (on deck's sphere). Both are placed on the globe
+ * the same way (orbit.js ecefToGlobe) and compared in 3D, km. Returns
+ * { n, maxKm, meanKm } or null.
  */
 export function checkAnchors(model, { t, anchors }) {
-  const D = Math.PI / 180;
   const km = [];
+  const g = [0, 0, 0];
   for (const a of anchors ?? []) {
     const i = model.byNorad.get(Number(String(a.id).replace(/^norad:/, '')));
     if (i === undefined || !Number.isFinite(a.lon)) continue;
     const pv = temeAt(model.sats[i], t);
     if (!pv) continue;
     const p = temeToEcef(pv.position, t);
-    const r = Math.hypot(p[0], p[1], p[2]);
-    const u = [Math.cos(a.lat * D) * Math.cos(a.lon * D), Math.cos(a.lat * D) * Math.sin(a.lon * D), Math.sin(a.lat * D)];
-    const c = Math.max(-1, Math.min(1, (p[0] * u[0] + p[1] * u[1] + p[2] * u[2]) / r));
-    km.push(Math.acos(c) * r);
+    ecefToGlobe(p[0], p[1], p[2], g);
+    const alt = Number.isFinite(a.altKm) ? a.altKm * 1000 : g[2]; // without a height, compare directions only
+    const m = globeToEcef(g[0], g[1], g[2]);
+    const q = globeToEcef(a.lon, a.lat, alt);
+    km.push(Math.hypot(m[0] - q[0], m[1] - q[1], m[2] - q[2]));
   }
   return km.length ? { n: km.length, maxKm: Math.max(...km), meanKm: km.reduce((x, y) => x + y, 0) / km.length } : null;
 }

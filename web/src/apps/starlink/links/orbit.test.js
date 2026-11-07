@@ -71,3 +71,25 @@ test('ommRecords: gp.json columns or a list', () => {
   assert.deepEqual(ommRecords([{ a: 1 }]), [{ a: 1 }]);
   assert.deepEqual(ommRecords(null), []);
 });
+
+test("ecefToGlobe: satellites are drawn where deck's globe and the Orbits layer put their true position", async () => {
+  const { ecefToGlobe, globeToEcef, GLOBE_RADIUS_M } = await import('./orbit.js');
+  // deck's GlobeView sphere, the radius netmap sends the Orbits layer (src/orbits.js).
+  assert.equal(GLOBE_RADIUS_M, 6370972);
+  // A satellite 470 km above 45° N, 30° E (WGS84): its true ECEF position…
+  const p = geodeticToEcef(30, 45, 470);
+  const g = ecefToGlobe(...p);
+  // …is drawn at its geocentric latitude, 0.18° south of the geodetic, and at its radius above deck's sphere.
+  assert.ok(Math.abs(g[0] - 30) < 1e-9);
+  assert.ok(Math.abs(g[1] - (Math.atan2(p[2], Math.hypot(p[0], p[1])) * 180) / Math.PI) < 1e-12);
+  assert.ok(g[1] < 45 - 0.17 && g[1] > 45 - 0.2, `${g[1]}`);
+  assert.ok(Math.abs(g[2] - (Math.hypot(...p) * 1000 - 6370972)) < 1e-6);
+  // As src/orbits.js's ecefToLngLatAlt (the Orbits layer's anchors) does it, and back exactly.
+  const r = Math.hypot(...p);
+  assert.deepEqual(g.map((x) => +x.toFixed(9)), [(Math.atan2(p[1], p[0]) * 180) / Math.PI, (Math.atan2(p[2], Math.hypot(p[0], p[1])) * 180) / Math.PI, r * 1000 - 6370972].map((x) => +x.toFixed(9)));
+  const back = globeToEcef(...g);
+  assert.ok(Math.hypot(back[0] - p[0], back[1] - p[1], back[2] - p[2]) < 1e-9);
+  // Drawing the geodetic lat/height instead would put it ~21 km north of that.
+  const wrong = globeToEcef(30, 45, 470e3);
+  assert.ok(Math.hypot(wrong[0] - p[0], wrong[1] - p[1], wrong[2] - p[2]) > 15);
+});

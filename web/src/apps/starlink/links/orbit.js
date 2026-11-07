@@ -164,6 +164,38 @@ export function geodeticToEcef(lon, lat, h = 0, out = [0, 0, 0]) {
 }
 
 /**
+ * deck.gl's globe: a sphere of this radius (m), on which [lon, lat, alt]
+ * means the point at radius GLOBE_RADIUS_M + alt in the direction (lon,
+ * lat), lat geocentric. netmap tells the Orbits layer this radius
+ * (view.earth.radius) and celestiary draws each satellite at its true ECEF
+ * position in that frame; src/orbits.js converts with the same sphere.
+ */
+export const GLOBE_RADIUS_M = 6370972;
+
+/**
+ * ECEF (km) -> where deck's globe draws that very point: [lon °, geocentric
+ * lat °, altitude m above GLOBE_RADIUS_M]. Not geodetic: drawing a
+ * satellite's WGS84 latitude and height on deck's sphere put it up to 21 km
+ * north of its true place in the north (south in the south) and up to 14 km
+ * off in height, away from where the Orbits layer draws it. Ground places
+ * (dishes, gateways, PoPs) are drawn at their lat/lon like everything else
+ * in netmap; visibility maths stays on WGS84 (site(), lookAt()).
+ */
+export function ecefToGlobe(x, y, z, out = [0, 0, 0], k = 0) {
+  const r = Math.sqrt(x * x + y * y + z * z);
+  out[k] = Math.atan2(y, x) / D2R;
+  out[k + 1] = Math.atan2(z, Math.hypot(x, y)) / D2R;
+  out[k + 2] = r * 1000 - GLOBE_RADIUS_M;
+  return out;
+}
+
+/** The inverse, for tests: [lon, lat, alt m] on deck's globe -> ECEF km. */
+export function globeToEcef(lon, lat, alt) {
+  const r = (GLOBE_RADIUS_M + alt) / 1000;
+  return [r * Math.cos(lat * D2R) * Math.cos(lon * D2R), r * Math.cos(lat * D2R) * Math.sin(lon * D2R), r * Math.sin(lat * D2R)];
+}
+
+/**
  * ECEF (km) -> [lon °, lat °, height km] on WGS84 (Bowring's method, two
  * iterations: well under a metre at LEO heights). Writes into `out` at `k`.
  */

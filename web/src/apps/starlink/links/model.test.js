@@ -225,3 +225,28 @@ test('in-view satellites carry their names (for the tooltip), not just catalog n
   for (const v of d.visible) assert.equal(v.name, `STARLINK-${v.norad}`);
   assert.ok(d.visible.every((v) => v.shell));
 });
+
+test("the model's drawn satellites match the Orbits layer's anchors in 3D", async () => {
+  const { checkAnchors } = await import('./core.js');
+  const { temeAt, temeToEcef, ecefToGlobe } = await import('./orbit.js');
+  const m = new LinkModel({ omm: OMM, gateways: [], pops: [] });
+  const t = T0 + 9000;
+  m.propagate(t);
+  assert.ok(m.opList.length >= 40);
+  // Anchors as ctx.orbits gives them: the true ECEF on deck's sphere (spherical lon/lat, km above it).
+  const anchors = m.sats.slice(0, 40).map((s) => {
+    const p = temeToEcef(temeAt(s, t).position, t);
+    const [lon, lat, alt] = ecefToGlobe(...p);
+    return { id: `norad:${s.norad}`, lon, lat, altKm: alt / 1000 };
+  });
+  const c = checkAnchors(m, { t, anchors });
+  assert.equal(c.n, 40);
+  assert.ok(c.maxKm < 0.001, `${c.maxKm}`);
+  // And the drawn positions (geo) are those same points.
+  for (const [k, a] of anchors.entries()) {
+    assert.ok(Math.abs(m.geo[3 * k + 1] - a.lat) < 1e-4 && Math.abs(m.geo[3 * k + 2] / 1000 - a.altKm) < 1e-3);
+  }
+  // A geodetic latitude (as drawn before) is caught: ~10 km off at these latitudes.
+  const off = checkAnchors(m, { t, anchors: anchors.map((a) => ({ ...a, lat: a.lat + 0.1 })) });
+  assert.ok(off.maxKm > 10);
+});

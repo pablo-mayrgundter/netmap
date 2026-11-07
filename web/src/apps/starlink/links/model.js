@@ -5,7 +5,7 @@
 // the main thread, node's tests run it directly. Everything here is a model;
 // the section labels it so, with these assumptions (MODEL, below).
 
-import { ecefToGeodetic, propagateAll, satellites } from './orbit.js';
+import { ecefToGeodetic, ecefToGlobe, propagateAll, satellites } from './orbit.js';
 import { clusterPlanes, clusterShells, markOperational, orbitAngles } from './shells.js';
 import { azimuth, coverageAngle, fibreMs, gcKm, lookAt, site, vacuumMs } from './geometry.js';
 import { buildGrid, GRID, refreshGrid } from './grid.js';
@@ -90,7 +90,7 @@ export class LinkModel {
     this.pos = new Float64Array(3 * n);
     this.vel = new Float64Array(3 * n);
     this.ok = new Uint8Array(n);
-    this.geo = new Float32Array(3 * n); // lon °, lat °, altitude m (drawing)
+    this.geo = new Float32Array(3 * n); // as deck's globe draws them: lon °, geocentric lat °, m above its sphere
     this.raan = new Float64Array(n);
     this.u = new Float64Array(n);
     this.operational = new Uint8Array(n);
@@ -130,15 +130,10 @@ export class LinkModel {
     propagateAll(this.sats, ms, this.pos, this.vel, this.ok);
     const t1 = performance.now();
     if (!this.planes) this.classify();
+    // Where deck's globe draws each satellite's true position (not its
+    // geodetic lat/height: orbit.js ecefToGlobe), as the Orbits layer does.
     const g = this.geo, pos = this.pos;
-    const tmp = [0, 0, 0];
-    for (const i of this.opList) {
-      if (!this.ok[i]) continue;
-      ecefToGeodetic(pos[3 * i], pos[3 * i + 1], pos[3 * i + 2], tmp);
-      g[3 * i] = tmp[0];
-      g[3 * i + 1] = tmp[1];
-      g[3 * i + 2] = tmp[2] * 1000;
-    }
+    for (const i of this.opList) if (this.ok[i]) ecefToGlobe(pos[3 * i], pos[3 * i + 1], pos[3 * i + 2], g, 3 * i);
     this.t = ms;
     this.timings.propagate = t1 - t0;
     this.timings.geodetic = performance.now() - t1;
@@ -442,6 +437,7 @@ export class LinkModel {
       lon: this.geo[3 * i],
       lat: this.geo[3 * i + 1],
       alt: this.geo[3 * i + 2],
+      height: this.ok[i] ? ecefToGeodetic(this.pos[3 * i], this.pos[3 * i + 1], this.pos[3 * i + 2])[2] : null, // km above WGS84
       epoch: s.epoch,
     };
   }
@@ -472,7 +468,7 @@ export class LinkModel {
     const out = { t: this.t, slot, user: { lon, lat }, mask: o.userMask, gwMask: o.gwMask, visible: visible.slice(0, 60).map((v) => ({ ...v, norad: this.sats[v.i].norad, name: this.sats[v.i].name, shell: this.shells[this.shellOf[v.i]]?.label ?? null, lon: this.geo[3 * v.i], lat: this.geo[3 * v.i + 1], alt: this.geo[3 * v.i + 2] })), nVisible: visible.length, nTerminal: visible.filter((v) => v.terminal).length, serving: null, gateways: [], exit: null, latency: null };
     if (!pick) return out;
     const v = visible.find((x) => x.i === pick.i);
-    out.serving = { ...this.satInfo(pick.i), el: v.el, range: v.range, az: azimuth(s, this.pos, 3 * pick.i), rule: pick.rule, held: !!pick.held, footprint: coverageAngle(this.geo[3 * pick.i + 2] / 1000, o.gwMask) };
+    out.serving = { ...this.satInfo(pick.i), el: v.el, range: v.range, az: azimuth(s, this.pos, 3 * pick.i), rule: pick.rule, held: !!pick.held, footprint: coverageAngle(ecefToGeodetic(this.pos[3 * pick.i], this.pos[3 * pick.i + 1], this.pos[3 * pick.i + 2])[2], o.gwMask) };
     out.gateways = this.gatewaysOf(pick.i).map(({ g, range }) => this.gatewayLeg(g, range));
     out.gateways.sort((a, b) => a.ms - b.ms);
     const up = vacuumMs(v.range);
