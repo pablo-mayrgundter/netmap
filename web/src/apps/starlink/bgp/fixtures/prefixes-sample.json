@@ -1,0 +1,87 @@
+{
+ "schema": 1,
+ "_about": "A sample of web/public/data/starlink/prefixes.json (python -m netmap starlink, 2026-11-07).",
+ "pops": [
+  "frntdeu1",
+  "mlnnita1",
+  "msctomn1",
+  "nrbiken1",
+  "wrswpol1"
+ ],
+ "regions": [
+  [
+   "AT",
+   "AT-9",
+   "Vienna"
+  ],
+  [
+   "CA",
+   "CA-NU",
+   "Hope Bay"
+  ],
+  [
+   "DE",
+   "DE-BE",
+   "Berlin"
+  ],
+  [
+   "FR",
+   "FR-IDF",
+   "Paris"
+  ],
+  [
+   "KM",
+   "KM-G",
+   "Moroni"
+  ],
+  [
+   "OM",
+   "OM-MA",
+   "Muscat"
+  ],
+  [
+   "UA",
+   "UA-30",
+   "Kyiv"
+  ]
+ ],
+ "prefix": [
+  "9.246.166.0/24",
+  "9.246.167.0/24",
+  "150.228.30.0/24",
+  "150.228.31.0/24",
+  "209.198.158.0/24",
+  "209.198.159.0/24",
+  "2605:59c0:6c00::/40",
+  "2a0d:3341:cd00::/40",
+  "2a0d:3341:d400::/40",
+  "2a0d:3344:4000::/38",
+  "9.161.65.0/24"
+ ],
+ "pop": [
+  0,
+  0,
+  4,
+  4,
+  0,
+  0,
+  3,
+  1,
+  2,
+  2,
+  -1
+ ],
+ "region": [
+  2,
+  2,
+  6,
+  6,
+  0,
+  0,
+  4,
+  3,
+  5,
+  5,
+  1
+ ]
+}

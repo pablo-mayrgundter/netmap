@@ -1,0 +1,56 @@
+/* The Starlink app's BGP section (section.js). Scoped to .slbgp-*. */
+.slbgp-h { display: flex; align-items: center; gap: 6px; }
+.slbgp-tag {
+  display: inline-block; padding: 0 5px; border-radius: 4px; font-size: 10px; line-height: 15px; letter-spacing: 0.04em;
+  text-transform: uppercase; color: #9be3a4; background: rgba(110, 220, 130, 0.12); border: 1px solid rgba(110, 220, 130, 0.35); font-weight: 600;
+}
+.apps-body .slbgp-src { font-size: 12px; margin-top: 0; }
+.slbgp-src a { color: var(--accent); }
+.slbgp-stat dl { grid-template-columns: max-content 1fr; }
+.slbgp-stat dd { min-width: 0; overflow-wrap: anywhere; }
+svg.slbgp-spark { display: inline-block; width: 96px; height: 20px; vertical-align: middle; margin-left: 6px; fill: none; }
+svg.slbgp-spark path { fill: none; stroke-width: 1.4; stroke-linejoin: round; }
+svg.slbgp-spark .v4 { stroke: var(--accent); }
+svg.slbgp-spark .v6 { stroke: #c49bff; opacity: 0.8; }
+.slbgp-stat details { margin: 6px 0; }
+.slbgp-stat summary { cursor: pointer; color: var(--fg); font-size: 12px; }
+.slbgp-stat h4 { font-size: 11px; color: var(--muted); margin: 8px 0 2px; font-weight: 600; }
+.slbgp-off { padding: 2px 0; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.slbgp-pops ul { list-style: none; margin: 4px 0; padding: 0; display: grid; grid-template-columns: max-content 1fr max-content; gap: 2px 8px; align-items: center; font-size: 12px; }
+.slbgp-pops li { display: contents; }
+.slbgp-pops .bar { height: 6px; border-radius: 3px; background: linear-gradient(90deg, var(--accent) var(--w), transparent var(--w)); opacity: 0.7; }
+.slbgp-pops .n { font-variant-numeric: tabular-nums; color: var(--muted); }
+.apps-body .slbgp-pops p, .apps-body .slbgp-nbrs p { font-size: 11px; }
+.apps-body .slbgp-when { font-size: 11px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.btn.slbgp-small { padding: 1px 8px; font-size: 11px; min-height: 0; }
+
+.slbgp-controls { align-items: center; }
+.slbgp-conn { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); min-width: 0; flex-wrap: wrap; }
+.slbgp-conn i { width: 8px; height: 8px; border-radius: 50%; background: #555b68; flex: none; }
+.slbgp-conn.live { color: #9be3a4; }
+.slbgp-conn.live i { background: #4fd36b; box-shadow: 0 0 6px #4fd36b; animation: slbgp-pulse 1.6s ease-in-out infinite; }
+.slbgp-conn.wait i { background: #ffb428; }
+.slbgp-conn.paused i { background: var(--accent); }
+@keyframes slbgp-pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .slbgp-conn.live i { animation: none; } }
+.apps-body .slbgp-rates { font-size: 11px; }
+
+.slbgp-feed { list-style: none; margin: 4px 0 0; padding: 0; font-size: 12px; }
+.slbgp-row { padding: 4px 0; border-top: 1px solid var(--line); min-width: 0; }
+.slbgp-head { display: flex; gap: 8px; color: var(--muted); font-size: 11px; }
+.slbgp-head time { font-variant-numeric: tabular-nums; color: var(--fg); }
+.slbgp-peer { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.slbgp-l1 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; margin-top: 1px; }
+.slbgp-kind { font-weight: 700; font-size: 10px; border-radius: 3px; padding: 0 4px; line-height: 15px; }
+.slbgp-kind.a { color: #05070c; background: rgb(110, 231, 255); }
+.slbgp-kind.w { color: #05070c; background: rgb(255, 122, 92); }
+.apps-body .slbgp-pfx { font-size: 12px; overflow-wrap: anywhere; }
+.slbgp-pop { color: var(--fg); white-space: nowrap; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.slbgp-path { display: flex; flex-wrap: wrap; align-items: center; gap: 0 2px; margin-top: 2px; font-size: 11px; font-variant-numeric: tabular-nums; }
+.slbgp-as { color: var(--muted); border: 0; background: none; font: inherit; padding: 0 2px; border-radius: 3px; }
+.slbgp-as.on { color: var(--accent); cursor: pointer; }
+.slbgp-as.on:hover, .slbgp-as.on:focus-visible { background: var(--hover); outline: none; text-decoration: underline; }
+.slbgp-pre { font-size: 9px; opacity: 0.8; margin-left: 1px; }
+.slbgp-sep { color: var(--muted); opacity: 0.5; }
+.slbgp-route { margin-left: 4px; border: 1px solid var(--line); border-radius: 4px; background: none; color: var(--muted); font: inherit; font-size: 10px; padding: 0 5px; cursor: pointer; }
+.slbgp-route:hover, .slbgp-route:focus-visible { color: var(--accent); border-color: var(--accent); outline: none; }

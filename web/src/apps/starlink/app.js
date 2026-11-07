@@ -5,13 +5,14 @@
 import { esc, fmt } from '../util.js';
 import { STARLINK_ASN, starlinkSummary } from './summary.js';
 import * as pops from './pops/section.js';
+import * as bgp from './bgp/section.js';
 import * as atlas from './atlas/section.js';
 
 // The sections, in panel order. Each is a module with mount(el, ctx),
 // unmount() and, optionally, onHash(params); it gets its own element and
 // shares the app's ctx (so its hash keys are starlink.<key>, its layer
 // groups the app's: pick names that don't collide).
-const SECTIONS = [pops, atlas];
+const SECTIONS = [pops, bgp, atlas];
 
 let ctx = null;
 let root = null; // the summary's element
@@ -93,7 +94,7 @@ function aboutHTML() {
       <p><b>Modelled.</b> Routing in space is below the IP layer and isn't public: the laser links between
         satellites are modelled from SpaceX's FCC filings, and gateway sites come from FCC earth-station
         filings. Anything modelled will say so.</p>
-      <p class="muted">Coming next here: a live BGP looking glass and modelled satellite links.</p>
+      <p class="muted">Coming next here: modelled satellite links (dish, satellite, gateway, PoP) and the laser mesh.</p>
     </details>`;
 }
 
