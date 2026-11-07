@@ -66,13 +66,13 @@ follows the light of the links it replaces. Member links are hidden. The
 650 km), and hovering a fiber shows its transit/peering counts. It works in
 cyber mode too, where it bundles links between nearby clusters.
 
-Keys: `1` cyber · `2` hybrid · `3` geo (jumps on the layout slider) · `g` globe · `/` search · `Esc` stop
-exploring, then clear the route. Camera (hold): `↑`/`↓` pitch, `←`/`→` rotate,
+Keys: `1` cyber · `2` hybrid · `3` geo (jumps on the layout slider) · `g` globe · `/` search · `]` the
+apps panel · `Esc` stop exploring, then clear the route. Camera (hold): `↑`/`↓` pitch, `←`/`→` rotate,
 `A`/`D` strafe, `W`/`S` zoom; on the globe the arrows orbit. The compass resets
 rotation and pitch.
 The URL hash is a full permalink: every control (layout, view, basemap,
-renderer, sliders, toggles), the dataset, the camera (2D map or globe) and the
-selected AS. Opening a link restores the view exactly, and an edit to the
+renderer, sliders, toggles), the dataset, the camera (2D map or globe), the
+selected AS, and the open app with its own state (`app=starlink`). Opening a link restores the view exactly, and an edit to the
 hash (typed, pasted, or back and forward) applies without a reload; picking
 a dataset from the list starts it without a route. Without a hash the
 viewer starts on the geo globe with backbone, points of presence and
@@ -149,6 +149,16 @@ The cyber layout of the AS map runs on a **backbone**: each AS's primary
 still drawn. Laying out the full graph (`--cyber-graph full`) gives a
 featureless ball, because multihoming and peering tie everything together.
 The provider tree is where the Opte starbursts come from.
+
+## Apps
+
+The **apps sidebar** holds apps that each focus the map on one network. It's
+a panel at the right on desktop (collapsible and resizable, the map reflows
+to its left) and a bottom drawer on phones (peek, half, full). The rail lists
+the apps. The first is **Starlink** (AS14593): its summary from the loaded
+graph (cone, k-core, upstreams and peers), fly-to, and what's public about
+its routing. More panels are coming (#28). How to write an app, and the `ctx`
+interface apps build on, are in [`web/src/apps/README.md`](web/src/apps/README.md).
 
 ## Orbits: satellites and space networks on the globe
 
