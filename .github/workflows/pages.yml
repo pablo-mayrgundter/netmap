@@ -53,8 +53,10 @@ jobs:
       - run: pip install -e "pipeline[itdk]"
       # Starlink's own geofeeds (web/public/data/starlink/), first so the map
       # build sites AS14593 at its PoPs. The token is for listing the archive
-      # the diff's previous snapshot comes from.
+      # the diff's previous snapshot comes from. If Starlink's feed is down,
+      # the site still deploys, just without the Starlink data.
       - name: Starlink PoPs and prefixes
+        continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python -m netmap starlink
