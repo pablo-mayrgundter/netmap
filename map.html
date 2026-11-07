@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>netmap · NetGL guest</title>
+    <style>
+      html, body { margin: 0; background: transparent; overflow: hidden; color: #9fb0c8; font: 13px/1.4 system-ui, sans-serif; }
+      #why { padding: 1em; }
+    </style>
+    <script type="module" crossorigin src="./assets/map-N_817wqL.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/lineSet-CDYCvKSm.js">
+    <link rel="modulepreload" crossorigin href="./assets/window-transport-1Jf4VxqX.js">
+  </head>
+  <body>
+    <!--
+      NetMap as a NetGL guest (README, "map.html"): a host page embeds this in
+      a hidden cross-origin iframe, and the globe deck.gl draws here is
+      replayed into the host's WebGL2 context. Opened on its own it says why
+      it shows nothing.
+    -->
+    <p id="why" hidden></p>
+  </body>
+</html>

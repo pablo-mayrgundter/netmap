@@ -1,0 +1,242 @@
+{
+ "format": 1,
+ "name": "internet",
+ "generated": "2026-11-07T01:57:07+00:00",
+ "synthetic": false,
+ "kind": "as",
+ "source": "CAIDA AS relationships (20261101.as-rel2.txt.bz2)",
+ "notes": [],
+ "counts": {
+  "nodes": 81623,
+  "edges": 680178,
+  "p2c": 171391,
+  "p2p": 508787,
+  "geolocated": 78089,
+  "pinned": 903,
+  "backbone": 109583,
+  "pops": 32216,
+  "routes": 25001
+ },
+ "modes": [
+  "cyber",
+  "geo",
+  "hybrid"
+ ],
+ "regions": [
+  {
+   "id": "unknown",
+   "name": "Unknown",
+   "rgb": [
+    220,
+    220,
+    220
+   ]
+  },
+  {
+   "id": "na",
+   "name": "North America",
+   "rgb": [
+    70,
+    110,
+    255
+   ]
+  },
+  {
+   "id": "eu",
+   "name": "Europe / Middle East / Central Asia",
+   "rgb": [
+    60,
+    210,
+    90
+   ]
+  },
+  {
+   "id": "ap",
+   "name": "Asia Pacific",
+   "rgb": [
+    255,
+    70,
+    60
+   ]
+  },
+  {
+   "id": "lac",
+   "name": "Latin America & Caribbean",
+   "rgb": [
+    245,
+    215,
+    50
+   ]
+  },
+  {
+   "id": "af",
+   "name": "Africa",
+   "rgb": [
+    255,
+    140,
+    30
+   ]
+  }
+ ],
+ "info_chunk": 1024,
+ "sections": {
+  "asn": {
+   "dtype": "uint32",
+   "offset": 0,
+   "length": 81623,
+   "shape": [
+    81623
+   ]
+  },
+  "pos_cyber": {
+   "dtype": "float32",
+   "offset": 326496,
+   "length": 163246,
+   "shape": [
+    81623,
+    2
+   ]
+  },
+  "pos_geo": {
+   "dtype": "float32",
+   "offset": 979480,
+   "length": 163246,
+   "shape": [
+    81623,
+    2
+   ]
+  },
+  "pos_hybrid": {
+   "dtype": "float32",
+   "offset": 1632464,
+   "length": 163246,
+   "shape": [
+    81623,
+    2
+   ]
+  },
+  "level": {
+   "dtype": "float32",
+   "offset": 2285448,
+   "length": 81623,
+   "shape": [
+    81623
+   ]
+  },
+  "degree": {
+   "dtype": "uint32",
+   "offset": 2611944,
+   "length": 81623,
+   "shape": [
+    81623
+   ]
+  },
+  "cone": {
+   "dtype": "uint32",
+   "offset": 2938440,
+   "length": 81623,
+   "shape": [
+    81623
+   ]
+  },
+  "region": {
+   "dtype": "uint8",
+   "offset": 3264936,
+   "length": 81623,
+   "shape": [
+    81623
+   ]
+  },
+  "flags": {
+   "dtype": "uint8",
+   "offset": 3346560,
+   "length": 81623,
+   "shape": [
+    81623
+   ]
+  },
+  "edges": {
+   "dtype": "uint32",
+   "offset": 3428184,
+   "length": 1360356,
+   "shape": [
+    680178,
+    2
+   ]
+  },
+  "edge_rel": {
+   "dtype": "int8",
+   "offset": 8869608,
+   "length": 680178,
+   "shape": [
+    680178
+   ]
+  },
+  "edge_rank": {
+   "dtype": "uint8",
+   "offset": 9549792,
+   "length": 680178,
+   "shape": [
+    680178
+   ]
+  },
+  "edge_backbone": {
+   "dtype": "uint8",
+   "offset": 10229976,
+   "length": 680178,
+   "shape": [
+    680178
+   ]
+  },
+  "pop_pos": {
+   "dtype": "float32",
+   "offset": 10910160,
+   "length": 64432,
+   "shape": [
+    32216,
+    2
+   ]
+  },
+  "pop_node": {
+   "dtype": "uint32",
+   "offset": 11167888,
+   "length": 32216,
+   "shape": [
+    32216
+   ]
+  },
+  "pop_offset": {
+   "dtype": "uint32",
+   "offset": 11296752,
+   "length": 81624,
+   "shape": [
+    81624
+   ]
+  },
+  "edge_pop": {
+   "dtype": "int32",
+   "offset": 11623248,
+   "length": 1360356,
+   "shape": [
+    680178,
+    2
+   ]
+  },
+  "pop_routes": {
+   "dtype": "uint32",
+   "offset": 17064672,
+   "length": 50002,
+   "shape": [
+    25001,
+    2
+   ]
+  }
+ },
+ "attribution": [
+  "Prefix-to-AS: RouteViews / NRO via ip-location-db (CC BY 4.0)",
+  "IP geolocation: <a href=\"https://db-ip.com\">DB-IP</a> lite (CC BY 4.0)",
+  "AS14593 sites: Starlink PoP list (geoip.starlinkisp.net), airports from OurAirports (public domain)",
+  "The CAIDA UCSD AS Relationships Dataset - 20261101, <a href=\"https://catalog.caida.org/dataset/as_relationships_serial_2\">catalog</a>",
+  "The CAIDA UCSD AS to Organization Mapping Dataset, <a href=\"https://catalog.caida.org/dataset/as_organizations\">catalog</a>"
+ ]
+}

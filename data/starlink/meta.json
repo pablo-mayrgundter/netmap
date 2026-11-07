@@ -1,0 +1,374 @@
+{
+ "schema": 1,
+ "kind": "starlink",
+ "name": "Starlink (AS14593)",
+ "asn": 14593,
+ "fetched_at": "2026-11-07T01:56:23Z",
+ "generated": "2026-11-07T01:56:23Z",
+ "sources": {
+  "feed": {
+   "url": "https://geoip.starlinkisp.net/feed.csv",
+   "sha256": "5196f5e8a41aa52c9d940bd30924ded82f8c342511f839d611805d1db5a599d5",
+   "bytes": 160844,
+   "fetched_at": "2026-11-07T01:56:23Z",
+   "rows": 4548,
+   "skipped": 0
+  },
+  "pops": {
+   "url": "https://geoip.starlinkisp.net/pops.csv",
+   "sha256": "d2c481a7037ee39385720b563d487451cfffbb55025ffbdb9e964c55f0cf2721",
+   "bytes": 120940,
+   "fetched_at": "2026-11-07T01:56:23Z",
+   "rows": 4095,
+   "skipped": 0
+  },
+  "ourairports_airports": {
+   "url": "https://raw.githubusercontent.com/davidmegginson/ourairports-data/main/airports.csv",
+   "sha256": "e2e65a3ddaf76170c0e2c373cb8b68597bdf3b59d243c4d6db454d48498ba6d7",
+   "bytes": 12757683,
+   "fetched_at": "2026-11-07T01:56:23Z"
+  },
+  "ourairports_regions": {
+   "url": "https://raw.githubusercontent.com/davidmegginson/ourairports-data/main/regions.csv",
+   "sha256": "9220d6582b804cfdec8432e5bb21456699c9df8969bf5d8886beb62ff0b1318b",
+   "bytes": 485265,
+   "fetched_at": "2026-11-07T01:56:23Z"
+  },
+  "ourairports_countries": {
+   "url": "https://raw.githubusercontent.com/davidmegginson/ourairports-data/main/countries.csv",
+   "sha256": "2a9dbee691125b0cdb8ceb5fe227c48c903f99c488963b8e53e2ab366521c639",
+   "bytes": 24583,
+   "fetched_at": "2026-11-07T01:56:24Z"
+  }
+ },
+ "counts": {
+  "pops": 66,
+  "pops_located": 65,
+  "prefixes": 4548,
+  "v4_prefixes": 3632,
+  "v6_prefixes": 916,
+  "feed_prefixes": 4548,
+  "prefixes_with_pop": 4095,
+  "feed_prefixes_without_pop": 453,
+  "pop_prefixes_not_in_feed": 0,
+  "v4_addresses": 883124,
+  "v4_addresses_with_pop": 836512,
+  "regions": 327,
+  "regions_by_precision": {
+   "none": 3,
+   "city": 294,
+   "country": 16,
+   "region": 14
+  },
+  "countries": 224
+ },
+ "unmatched": {
+  "iata": [
+   {
+    "code": "kentwax2",
+    "iata": "staging2",
+    "prefixes": 3
+   }
+  ],
+  "regions": [
+   {
+    "country": "PN",
+    "region": "",
+    "city": "Adamstown"
+   },
+   {
+    "country": "SJ",
+    "region": "",
+    "city": "Longyearben"
+   },
+   {
+    "country": "TK",
+    "region": "",
+    "city": "Atafu"
+   }
+  ]
+ },
+ "diff": {
+  "previous": {
+   "snapshot": "2026-10-06T18:02:00Z",
+   "pops": {
+    "url": "https://raw.githubusercontent.com/clarkzjw/starlink-geoip-data/master/pop/202610/pops-20261006-1802.csv",
+    "sha256": "592311ead3d788d8ffe9907d932371cdb2d3121cba58224f0da2f9e9bc27cece",
+    "bytes": 116665,
+    "fetched_at": "2026-11-07T01:56:26Z"
+   },
+   "feed": {
+    "url": "https://raw.githubusercontent.com/clarkzjw/starlink-geoip-data/master/feed/202610/feed-20261006-1802.csv",
+    "sha256": "8aede6f3aab17f4dd5cbfbda818c4aa9bdd73487eaad6a91c6071676c3eb8f9d",
+    "bytes": 155024,
+    "fetched_at": "2026-11-07T01:56:26Z"
+   }
+  },
+  "pops_added": [
+   "atlagax3"
+  ],
+  "pops_removed": [],
+  "pop_prefix_counts": [
+   {
+    "code": "ashnvax2",
+    "before": 121,
+    "after": 123
+   },
+   {
+    "code": "atlagax1",
+    "before": 102,
+    "after": 104
+   },
+   {
+    "code": "atlagax3",
+    "before": 0,
+    "after": 3
+   },
+   {
+    "code": "bgtacol1",
+    "before": 98,
+    "after": 102
+   },
+   {
+    "code": "bnssarg1",
+    "before": 81,
+    "after": 93
+   },
+   {
+    "code": "brsabra1",
+    "before": 45,
+    "after": 49
+   },
+   {
+    "code": "chcoilx1",
+    "before": 126,
+    "after": 128
+   },
+   {
+    "code": "chrhnzl1",
+    "before": 6,
+    "after": 8
+   },
+   {
+    "code": "clgycan1",
+    "before": 60,
+    "after": 62
+   },
+   {
+    "code": "dhkabgd1",
+    "before": 6,
+    "after": 9
+   },
+   {
+    "code": "dllstxx1",
+    "before": 131,
+    "after": 125
+   },
+   {
+    "code": "dnvrcox1",
+    "before": 51,
+    "after": 53
+   },
+   {
+    "code": "frntdeu1",
+    "before": 156,
+    "after": 159
+   },
+   {
+    "code": "frtabra1",
+    "before": 51,
+    "after": 55
+   },
+   {
+    "code": "gtmygtm1",
+    "before": 49,
+    "after": 53
+   },
+   {
+    "code": "jhngzaf1",
+    "before": 99,
+    "after": 103
+   },
+   {
+    "code": "kllrmys1",
+    "before": 25,
+    "after": 22
+   },
+   {
+    "code": "knsymox1",
+    "before": 59,
+    "after": 65
+   },
+   {
+    "code": "lndngbr1",
+    "before": 102,
+    "after": 108
+   },
+   {
+    "code": "lsancax1",
+    "before": 71,
+    "after": 75
+   },
+   {
+    "code": "mdrdesp1",
+    "before": 122,
+    "after": 126
+   },
+   {
+    "code": "mmmiflx1",
+    "before": 151,
+    "after": 194
+   },
+   {
+    "code": "nrbiken1",
+    "before": 133,
+    "after": 139
+   },
+   {
+    "code": "nwyynyx1",
+    "before": 88,
+    "after": 90
+   },
+   {
+    "code": "sfiabgr1",
+    "before": 153,
+    "after": 159
+   },
+   {
+    "code": "sngesgp1",
+    "before": 42,
+    "after": 44
+   },
+   {
+    "code": "sntochl1",
+    "before": 105,
+    "after": 117
+   },
+   {
+    "code": "stcmswe1",
+    "before": 31,
+    "after": 34
+   },
+   {
+    "code": "sydyaus1",
+    "before": 96,
+    "after": 100
+   },
+   {
+    "code": "tmpeazx1",
+    "before": 68,
+    "after": 74
+   }
+  ],
+  "prefixes_assigned": 149,
+  "prefixes_unassigned": 1,
+  "prefixes_moved": 12,
+  "moves": [
+   {
+    "from": "dllstxx1",
+    "to": "tmpeazx1",
+    "prefixes": 4
+   },
+   {
+    "from": "frntdeu1",
+    "to": "stcmswe1",
+    "prefixes": 3
+   },
+   {
+    "from": "kllrmys1",
+    "to": "dhkabgd1",
+    "prefixes": 3
+   },
+   {
+    "from": "dllstxx1",
+    "to": "knsymox1",
+    "prefixes": 2
+   }
+  ],
+  "moved": [
+   [
+    "179.64.124.0/24",
+    "dllstxx1",
+    "knsymox1"
+   ],
+   [
+    "179.64.125.0/24",
+    "dllstxx1",
+    "knsymox1"
+   ],
+   [
+    "179.65.114.0/24",
+    "kllrmys1",
+    "dhkabgd1"
+   ],
+   [
+    "179.65.115.0/24",
+    "kllrmys1",
+    "dhkabgd1"
+   ],
+   [
+    "179.65.172.0/24",
+    "dllstxx1",
+    "tmpeazx1"
+   ],
+   [
+    "179.65.173.0/24",
+    "dllstxx1",
+    "tmpeazx1"
+   ],
+   [
+    "179.65.174.0/24",
+    "dllstxx1",
+    "tmpeazx1"
+   ],
+   [
+    "179.65.175.0/24",
+    "dllstxx1",
+    "tmpeazx1"
+   ],
+   [
+    "216.128.16.0/24",
+    "frntdeu1",
+    "stcmswe1"
+   ],
+   [
+    "216.128.17.0/24",
+    "frntdeu1",
+    "stcmswe1"
+   ],
+   [
+    "2406:2d40:d500::/40",
+    "kllrmys1",
+    "dhkabgd1"
+   ],
+   [
+    "2a0d:3344:3800::/40",
+    "frntdeu1",
+    "stcmswe1"
+   ]
+  ],
+  "moved_truncated": false,
+  "feed": {
+   "prefixes_added": 166,
+   "prefixes_removed": 1,
+   "prefixes_relocated": 6
+  }
+ },
+ "diff_error": null,
+ "files": {
+  "pops.json": 52423,
+  "prefixes.json": 123941,
+  "regions.json": 101320
+ },
+ "attribution": [
+  "Starlink geofeed and PoP list: <a href=\"https://geoip.starlinkisp.net/feed.csv\">geoip.starlinkisp.net</a>",
+  "Airports, regions and countries: <a href=\"https://ourairports.com/data/\">OurAirports</a> (public domain)",
+  "Previous snapshot: <a href=\"https://github.com/clarkzjw/starlink-geoip-data\">clarkzjw/starlink-geoip-data</a> (CC BY-SA 4.0)"
+ ],
+ "caveats": [
+  "A prefix's PoP is the one Starlink assigns that address block to; it does not reliably predict which PoP a given user's traffic leaves through.",
+  "Before October 2025 Starlink published no PoP list; PoP mappings from then (e.g. in clarkzjw/starlink-geoip-data's geoip/ directory) came from DNS PTR records, which were often stale.",
+  "The feed's city is the region Starlink sells into, not always a real town (mines, research stations), and customers can be hundreds of km away from it.",
+  "PoP locations are their IATA airport's coordinates, not the facility's."
+ ]
+}
