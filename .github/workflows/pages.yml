@@ -21,6 +21,11 @@ on:
 permissions:
   contents: write
 
+env:
+  # netmap's dashboard (dash/) is built on this bizdash release; the same ref
+  # is in preview.yml and ci.yml (dash/README.md, "Bumping bizdash").
+  BIZDASH_REF: 5a6509aa42e3e6ee95118db223c0ccd954a37f48 # v0.1.0-rc.1
+
 concurrency:
   group: pages
   cancel-in-progress: true
@@ -78,6 +83,12 @@ jobs:
           # preview.yml, so PR previews stay out of the data.
           VITE_GA_MEASUREMENT_ID: ${{ vars.GA_MEASUREMENT_ID || 'G-3PWPNFW02J' }}
         run: npm ci && npm run build && touch dist/.nojekyll
+      # The dashboard (dash/), at <site>/dash/: static, no secrets; data is
+      # behind each viewer's Google sign-in and GA access.
+      - name: Build dashboard
+        run: |
+          pip install "git+https://github.com/pablo-mayrgundter/bizdash@${BIZDASH_REF}"
+          python -m bizdash build --site dash/site --out web/dist/dash
       # Publish as a single fresh commit so monthly refreshes of ~600 MB of
       # tiles don't pile up in the branch's history. PR previews (pr-preview/,
       # managed by preview.yml) are carried over from the current branch.

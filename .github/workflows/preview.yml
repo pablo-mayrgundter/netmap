@@ -15,6 +15,9 @@ permissions:
 
 concurrency: preview-${{ github.ref }}
 
+env:
+  BIZDASH_REF: 5a6509aa42e3e6ee95118db223c0ccd954a37f48 # v0.1.0-rc.1, as in pages.yml
+
 jobs:
   preview:
     runs-on: ubuntu-latest
@@ -58,6 +61,11 @@ jobs:
         if: github.event.action != 'closed'
         working-directory: web
         run: npm ci && npm run build
+      - name: Build dashboard
+        if: github.event.action != 'closed'
+        run: |
+          pip install "git+https://github.com/pablo-mayrgundter/bizdash@${BIZDASH_REF}"
+          python -m bizdash build --site dash/site --out web/dist/dash
       - uses: rossjrw/pr-preview-action@v1
         with:
           source-dir: ./web/dist/

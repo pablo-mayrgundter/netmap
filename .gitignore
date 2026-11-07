@@ -7,3 +7,4 @@ web/dist/
 __pycache__/
 *.egg-info/
 .pytest_cache/
+_site/

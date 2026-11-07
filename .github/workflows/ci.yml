@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+env:
+  BIZDASH_REF: 5a6509aa42e3e6ee95118db223c0ccd954a37f48 # v0.1.0-rc.1, as in pages.yml
+
 jobs:
   pipeline:
     runs-on: ubuntu-latest
@@ -28,3 +31,20 @@ jobs:
         working-directory: web
       - run: npm test
         working-directory: web
+
+  # netmap's dashboard (dash/): bizdash's config check, the plugins' unit
+  # tests, and the built page in Chromium with ?demo=1. No credentials.
+  dash:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pip install "git+https://github.com/pablo-mayrgundter/bizdash@${BIZDASH_REF}" pytest playwright
+      - run: python -m playwright install --with-deps chromium
+      - run: python -m bizdash check --site dash/site
+      - run: python -m pytest dash

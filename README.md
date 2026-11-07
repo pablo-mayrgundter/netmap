@@ -599,6 +599,11 @@ the page. *No thanks* drops everything, and the choice is remembered in
 again to change it. With Do Not Track or Global Privacy Control set, netmap
 never asks and never loads the tag.
 
+The dashboard that reads this data is in [`dash/`](dash/README.md), published
+at [`/netmap/dash/`](https://pablo-mayrgundter.github.io/netmap/dash/)
+(`?demo=1` for synthetic data). It's a [bizdash](https://github.com/pablo-mayrgundter/bizdash)
+deployment, and each viewer signs in with their own Google account.
+
 What's sent (`web/src/analytics.js`): Consent Mode v2 starts with ads and
 analytics storage denied, and *Allow* grants analytics storage only. Google
 signals and ad personalisation are off. The page is sent as its origin and
