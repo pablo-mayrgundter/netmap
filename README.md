@@ -165,8 +165,46 @@ PeeringDB's API and kept for the session. Click a PoP for its prefixes, IATA
 code and top regions (`starlink.pop=<code>`; `starlink.layer=` picks the map
 layers). The PoP-to-PoP backbone isn't published yet: the section says so,
 and draws one when a source supplies it (`web/src/apps/starlink/pops/backbone.js`).
+Its **Gateways and links** section (all of it *modelled*, and labelled so)
+draws Starlink's gateway sites from [Starlink data](#starlink-data), and for
+a dish you place on the map (`starlink.at=<lat>,<lon>`, or an example, or
+your location rounded to 0.1°) the satellites above its 25° mask, the
+serving satellite, the gateways that satellite sees above 25°, and the PoP
+nearest the gateway: dish → satellite → gateway → PoP, straight radio legs
+up to the satellite on the globe, through the sub-satellite point on the 2D
+map, with each leg's slant range and light time. Satellite positions are
+SGP4 from CelesTrak's elements (the snapshot celestiary's Orbits layer
+draws, so the two agree), propagated in a Web Worker once a second on
+netmap's clock; the serving satellite is the highest one in view that also
+sees a gateway, held for the scheduler's 15 s slot. Where none does (mid-ocean,
+or far from the gateways known), the traffic crosses the **laser mesh**: a
++Grid per shell among the satellites launched with lasers (from Group 2-1,
+September 2021), two links in the plane and one to the nearest satellite in
+each neighbouring plane, up to 5,000 km and clear of the Earth by 80 km,
+rebuilt every 15 s, and Dijkstra finds the shortest path in light time to a
+satellite that sees a gateway. The panel shows the hops and the latency
+against fibre along the great circle (c/1.47), to the PoP and to a
+destination PoP (`starlink.dest=<code>`). `starlink.layer` also takes `mesh`
+(drawn round the camera on the globe) and `traffic`, an **estimate**: each of
+the geofeed's customer regions, weighted by its IPv4 addresses, served and
+routed by the same rules, summed into the load on each laser link, feeder
+link and gateway and drawn as a heat map. No measured traffic data is public.
+`starlink.sat=<norad>` selects a satellite. The section's "How this is
+modelled" lists the assumptions and sources (`web/src/apps/starlink/links/`).
 More panels are coming (#28). How to write an app, and the `ctx`
 interface apps build on, are in [`web/src/apps/README.md`](web/src/apps/README.md).
+
+**Starlink's BGP** (measured, from RIPE RIS's route collectors, called from
+the browser): RIPEstat's announced prefixes (by PoP, through Starlink's
+geofeed), its neighbours either side with their power (on-map ones are
+clickable), how many RIS peers see it, and a year of prefix counts. Below
+it, a **live feed** from [RIS Live](https://ris-live.ripe.net/manual/): each
+UPDATE with AS14593 in its path, and each withdrawal of one of its
+prefixes, with the prefix's PoP and the AS path; each flashes its path on
+the map. The feed is off until you start it (`starlink.live=1` in the
+permalink), since it streams about a thousand updates a minute; it closes
+while the tab is hidden and reconnects with backoff. The code is in
+`web/src/apps/starlink/bgp/`.
 
 ## Orbits: satellites and space networks on the globe
 
@@ -432,6 +470,7 @@ cd web && npm run build && python3 -m http.server 5481 --directory dist
 | Starlink's [geofeed](https://geoip.starlinkisp.net/feed.csv) and [PoP list](https://geoip.starlinkisp.net/pops.csv) | Starlink PoPs, prefixes, regions; AS14593's sites | published by Starlink, no licence stated |
 | [OurAirports](https://ourairports.com/data/) airports, regions, countries | Starlink PoP and region locations | public domain |
 | [clarkzjw/starlink-geoip-data](https://github.com/clarkzjw/starlink-geoip-data) | the previous Starlink snapshot, for the diff | CC BY-SA 4.0 |
+| [RIPEstat](https://stat.ripe.net/) and [RIS Live](https://ris-live.ripe.net/) (RIPE NCC's RIS), live from the browser | the Starlink app's BGP: prefixes, neighbours, visibility, live updates | RIPE NCC terms of use, attribution |
 
 ip-location-db is pulled from the npm registry because it's mirrored
 everywhere, including sandboxes that can't reach CAIDA or the CDNs.
@@ -553,6 +592,56 @@ IPv6, 883k IPv4 addresses), 4,095 of them with a PoP, in 327 locations in
 fixture in `pipeline/tests/fixtures/starlink/`. `pages.yml` and
 `preview.yml` fetch the live feeds before building the map.
 
+### Gateways
+
+`python -m netmap starlink-gateways` writes `starlink/gateways.json`: the
+gateway (ground station) sites the app's modelled links come down at, each
+with where it's from. SpaceX publishes no list. The sites are
+[NodalArc](https://github.com/dotchance/nodalarc)'s catalog
+(`catalog/nodalarc/sites/earth/`, Apache-2.0; "facts are not owned by
+NodalArc"), cloned sparsely at a pinned commit (`--ref`; `--sites <dir>`
+reads a checkout). Only its Starlink gateway sites are kept, in two tiers:
+
+* **`filing`**: the site's FCC earth-station licence (IBFS file numbers
+  `SES-LIC-…`, `SES-MOD-…`, `SES-STA-…`; US government records, public
+  domain), with a link to it. `located` is `"filing"` when the point is the
+  licence's, `"town"` for the one site placed by a geocoder.
+* **`reported`**: a site the catalog notes as a confirmed Starlink gateway
+  with no filing (outside the US), placed at its town (±20 km or so).
+
+The catalog's city-centre guesses, its own scenario sites, sites with no
+source and sites that aren't Starlink gateways are left out (`excluded`
+counts them). Licensed sites are cross-checked against
+[tlrobinson/satsim](https://github.com/tlrobinson/satsim)'s list (BSD-2-Clause;
+FCC file numbers from 2019 and 2020): by file number, or by place for a later
+licence of the same site. In November 2026: 91 sites in 19 countries, 62 of
+them licensed (US, Guam, Puerto Rico) and 29 reported; 32 cross-checked, all
+within a kilometre but Sanderson TX, where satsim's longitude is 48 km out.
+
+Rows: `{id, name, country, lat, lon, alt_m, tier, located, filing,
+filing_url, source, antennas, cross_check: {source, by, km} | null}`, with
+`sources` (the commit, licences, satsim's sha256), `counts`, `excluded`,
+`attribution` and `caveats`. A licence isn't a working site, and Starlink
+runs many more gateways than are public, above all outside the US: the app
+says where its customer regions have no gateway within reach.
+
+These hosts weren't reachable when this was built, so they aren't sources
+yet: the FCC's own search (`licensing.fcc.gov`, `fcc.report`, `apps.fcc.gov`),
+and the regulators of Canada (`sms-sgs.ic.gc.ca`), Australia
+(`web.acma.gov.au`) and the UK (`ofcom.org.uk`).
+
+### Orbital elements
+
+The app propagates the constellation itself (SGP4, satellite.js) from
+CelesTrak's general perturbations elements. It takes them, in order, from
+celestiary's snapshot (`celestiary.org/data/earth/satellites/networks/starlink.json`,
+the elements its Orbits layer draws), from netmap's own snapshot, or from
+CelesTrak live. `python -m netmap starlink-gp` writes that snapshot,
+`starlink/gp.json`: CelesTrak's Starlink group as columns (`fields`, `rows`,
+the OMM fields SGP4 needs), about 1 MB, with the fetch's time and sha256
+(`--gp <file>` reads a saved GP JSON). CelesTrak asks for one download per
+two hours; the command caches by the hour.
+
 ## Outputs
 
 **Bundle** (`web/public/data/<id>/`):
@@ -598,6 +687,11 @@ the page. *No thanks* drops everything, and the choice is remembered in
 `localStorage`. *Privacy*, at the foot of the controls card, opens the prompt
 again to change it. With Do Not Track or Global Privacy Control set, netmap
 never asks and never loads the tag.
+
+The dashboard that reads this data is in [`dash/`](dash/README.md), published
+at [`/netmap/dash/`](https://pablo-mayrgundter.github.io/netmap/dash/)
+(`?demo=1` for synthetic data). It's a [bizdash](https://github.com/pablo-mayrgundter/bizdash)
+deployment, and each viewer signs in with their own Google account.
 
 What's sent (`web/src/analytics.js`): Consent Mode v2 starts with ads and
 analytics storage denied, and *Allow* grants analytics storage only. Google

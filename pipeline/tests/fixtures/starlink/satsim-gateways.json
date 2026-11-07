@@ -1,0 +1,40 @@
+[
+ {
+  "name": "Conrad MT Gateway",
+  "description": "Antenna count: 8<br>Antenna diameter: 5 feet<br>Antenna manufacturer: SpaceX<br>Uplink: 2.1 GHz total (27.5-29.1, 29.5-30 GHz)<br>Downlink: 1.3 GHz total (17.8-18.6, 18.8-19.3 GHz)<br>Date filed: 2019-08-15<br>https://fcc.report/IBFS/SES-LIC-20190816-01062",
+  "coordinates": [
+   -111.945278,
+   48.203306,
+   0
+  ],
+  "active": true
+ },
+ {
+  "name": "Loring ME Gateway",
+  "description": "Antenna count: 8<br>Antenna diameter: 5 feet<br>Antenna manufacturer: SpaceX<br>Uplink: 2.1 GHz total (27.5-29.1, 29.5-30 GHz)<br>Downlink: 1.3 GHz total (17.8-18.6, 18.8-19.3 GHz)<br>Date filed: 2019-08-15<br>https://fcc.report/IBFS/SES-LIC-20190816-01063",
+  "coordinates": [
+   -67.919528,
+   46.914917,
+   0
+  ]
+ },
+ {
+  "name": "Redmond WA Gateway",
+  "description": "Antenna count: 8<br>Antenna diameter: 5 feet<br>Antenna manufacturer: SpaceX<br>Uplink: 1.25 GHz total (28.35-29.1, 29.5-30 GHz)<br>Downlink: 1.3 GHz total (17.8-18.6, 18.8-19.3 GHz)<br>Date filed: 2019-08-26<br>https://fcc.report/IBFS/SES-LIC-20190827-01110",
+  "coordinates": [
+   -122.032139,
+   47.694194,
+   0
+  ],
+  "active": true
+ },
+ {
+  "name": "Sanderson TX Gateway",
+  "description": "Antenna count: 8<br>Antenna diameter: 5 feet<br>Antenna manufacturer: SpaceX<br>Uplink: 2.1 GHz total (27.5-29.1, 29.5-30 GHz)<br>Downlink: 1.3 GHz total (17.8-18.6, 18.8-19.3 GHz)<br>Date filed: 2020-04-01<br>https://fcc.report/IBFS/SES-LIC-20200505-00498",
+  "coordinates": [
+   -102.89,
+   30.194,
+   0
+  ]
+ }
+]

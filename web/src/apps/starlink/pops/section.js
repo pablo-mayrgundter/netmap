@@ -8,7 +8,7 @@
 
 import { esc, fmt } from '../../util.js';
 import { STARLINK_ASN } from '../summary.js';
-import { boundsAround, farthest, km, LAYERS, layersParam, parseLayers, popDetail, regionLabel, servedBy, shapeStarlink } from './data.js';
+import { boundsAround, farthest, km, LAYERS, layersParam, parseLayers, popDetail, POPS_LAYERS, regionLabel, servedBy, shapeStarlink } from './data.js';
 import { fetchPeering, PDB_WEB, placeAtPops, portsLabel, speedLabel } from './peeringdb.js';
 import { loadBackboneFile, normaliseBackbone, onBackbone, publishedBackbone } from './backbone.js';
 import { createMapLayers } from './mapLayers.js';
@@ -184,6 +184,7 @@ function selectPop(code, { fly = true, from = 'list', also = [] } = {}) {
 }
 
 function toggleLayer(name, on) {
+  st.layers = parseLayers(ctx.hash.get('layer')); // other sections' layers share the param
   if (on) st.layers.add(name);
   else st.layers.delete(name);
   ctx.hash.set('layer', layersParam(st.layers));
@@ -218,7 +219,7 @@ function body() {
     <p class="muted">From Starlink's own geofeed and PoP list${st.meta ? `, fetched ${day(st.meta.fetched_at)}` : ''}${c ? `: ${fmt(c.prefixes)} prefixes in ${fmt(c.regions)} regions` : ''}. Markers are sized by IPv4 addresses and placed at their IATA airport.</p>
     ${geo === false ? `<p class="app-warn">The network's nodes are only at their places in the geo layout; PoPs and regions are always at theirs. <button type="button" class="btn" data-geo>Geo layout</button></p>` : ''}
     <div class="sl-layers" role="group" aria-label="Starlink map layers">
-      ${LAYERS.map((l) => {
+      ${POPS_LAYERS.map((l) => {
         const none = l === 'backbone' && !st.backbone;
         return `<label${none ? ' class="muted" title="Not yet published"' : ''}><input type="checkbox" data-layer="${l}"${st.layers.has(l) ? ' checked' : ''}${none ? ' disabled' : ''}> ${LAYER_NAMES[l]}</label>`;
       }).join('')}

@@ -1,4 +1,4 @@
-"""Command line: ``netmap fetch | build | build-itdk | starlink | tiles | serve-tiles``."""
+"""Command line: ``netmap fetch | build | build-itdk | starlink | starlink-gateways | starlink-gp | tiles | serve-tiles``."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import asrel, export, geo, layout, metrics, pops, sources, starlink, synthetic, tiles
+from . import asrel, export, geo, layout, metrics, pops, sources, starlink, starlink_space, synthetic, tiles
 from .regions import REGIONS, region_of
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -332,6 +332,24 @@ def cmd_starlink(args):
     _step(f"done in {time.time() - t0:.0f}s: {meta['files']}")
 
 
+def cmd_starlink_gateways(args):
+    """Starlink's gateway sites, with provenance, for the app's modelled links."""
+    t0 = time.time()
+    out = Path(args.out)
+    _step(f"Starlink gateways -> {out}")
+    starlink_space.run_gateways(out, Path(args.cache), sites=args.sites, ref=args.ref, satsim=args.satsim, log=_step)
+    _step(f"done in {time.time() - t0:.0f}s")
+
+
+def cmd_starlink_gp(args):
+    """A snapshot of CelesTrak's Starlink GP elements (the browser's fallback)."""
+    t0 = time.time()
+    out = Path(args.out)
+    _step(f"Starlink GP elements -> {out}")
+    starlink_space.run_gp(out, Path(args.cache), src=args.gp, refresh=args.refresh, log=_step)
+    _step(f"done in {time.time() - t0:.0f}s")
+
+
 def cmd_tiles(args):
     bundle = Path(args.bundle)
     for mode in args.modes.split(","):
@@ -416,6 +434,22 @@ def main(argv=None):
     sl.add_argument("--previous-days", type=int, default=30)
     sl.add_argument("--refresh", action="store_true", help="re-download today's feeds")
     sl.set_defaults(fn=cmd_starlink)
+
+    sg = sub.add_parser("starlink-gateways", help="Starlink gateway sites (FCC filings and reports), with provenance")
+    sg.add_argument("--out", default=str(DEFAULT_OUT / "starlink"))
+    sg.add_argument("--cache", default=argparse.SUPPRESS, help="raw data cache dir")
+    sg.add_argument("--sites", help="a NodalArc checkout (or its catalog/nodalarc/sites/earth dir) instead of cloning")
+    sg.add_argument("--ref", default=starlink_space.NODALARC_REF, help="NodalArc commit to clone (or 'main')")
+    sg.add_argument("--satsim", default=starlink_space.SATSIM_URL,
+                    help="tlrobinson/satsim's starlink_gateways.json to cross-check against (URL, file or 'none')")
+    sg.set_defaults(fn=cmd_starlink_gateways)
+
+    sp = sub.add_parser("starlink-gp", help="snapshot of CelesTrak's Starlink GP elements")
+    sp.add_argument("--out", default=str(DEFAULT_OUT / "starlink"))
+    sp.add_argument("--cache", default=argparse.SUPPRESS, help="raw data cache dir")
+    sp.add_argument("--gp", default=starlink_space.CELESTRAK_GP, help="CelesTrak GP JSON: URL or local file")
+    sp.add_argument("--refresh", action="store_true", help="re-download this hour's elements")
+    sp.set_defaults(fn=cmd_starlink_gp)
 
     t = sub.add_parser("tiles", help="pre-render raster XYZ tiles for a bundle")
     t.add_argument("bundle")
