@@ -1,4 +1,4 @@
-import{c as He,i as Ve,J as We,K as ze,N as Xe,O as Se,V as Ye,W as we,Q as $e,k as je,G as qe,D as Qe,P as fe,S as ue,m as Ze,n as Je,t as et,H as tt,F as Te,v as xe,C as nt,s as rt,q as st,y as ot,A as at,x as it,w as ct,E as Re}from"./lineSet-CDYCvKSm.js";import{w as lt,N as ft,i as ut,a as Le,p as dt}from"./window-transport-1Jf4VxqX.js";const Et=`struct VertexInputs {
+import{c as He,i as Ve,J as We,K as ze,N as Xe,O as Se,V as Ye,W as we,Q as $e,k as je,G as qe,D as Qe,P as fe,S as ue,m as Ze,n as Je,t as et,H as tt,F as Te,v as xe,C as nt,s as rt,q as st,y as ot,A as at,x as it,w as ct,E as Re}from"./lineSet-DsXdrVWi.js";import{w as lt,N as ft,i as ut,a as Le,p as dt}from"./window-transport-1Jf4VxqX.js";const Et=`struct VertexInputs {
   @location(0) clipSpacePositions: vec2<f32>,
   @location(1) texCoords: vec2<f32>,
   @location(2) coordinates: vec2<f32>

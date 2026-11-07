@@ -1,7 +1,7 @@
 {
  "format": 1,
  "name": "internet",
- "generated": "2026-11-07T02:17:32+00:00",
+ "generated": "2026-11-07T03:13:34+00:00",
  "synthetic": false,
  "kind": "as",
  "source": "CAIDA AS relationships (20261101.as-rel2.txt.bz2)",
