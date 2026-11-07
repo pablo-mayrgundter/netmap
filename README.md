@@ -613,10 +613,12 @@ type is sent, only the search's length and whether it found something.
 | `style_change` | `control`, `on` (sliders report on release) |
 | `app_open` | `app_id` |
 
-To turn it on, set the repository variable `GA_MEASUREMENT_ID` (**Settings →
-Secrets and variables → Actions → Variables**) to the stream's `G-…` ID.
-`pages.yml` builds with it as `VITE_GA_MEASUREMENT_ID`, and PR previews
-don't, so they stay out of the data. In the GA4 data stream's *Enhanced
+The site's GA4 stream is `G-3PWPNFW02J` (a measurement ID is public: it's in
+every page that loads the tag). `pages.yml` builds with it as
+`VITE_GA_MEASUREMENT_ID`; the repository variable `GA_MEASUREMENT_ID`
+(**Settings → Secrets and variables → Actions → Variables**) overrides it, for
+a fork or another stream. PR previews build without it, so they stay out of
+the data. In the GA4 data stream's *Enhanced
 measurement*, turn off *Page changes based on browser history events*:
 netmap rewrites its hash as you move, and those page views would carry it.
 Locally, a dev server stays off unless it's asked to:
