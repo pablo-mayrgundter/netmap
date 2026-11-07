@@ -64,6 +64,10 @@ jobs:
           du -sh web/public/data/internet/tiles/*
       - name: Build viewer
         working-directory: web
+        env:
+          # Google Analytics (README: Analytics); unset builds no tag. Not in
+          # preview.yml, so PR previews stay out of the data.
+          VITE_GA_MEASUREMENT_ID: ${{ vars.GA_MEASUREMENT_ID }}
         run: npm ci && npm run build && touch dist/.nojekyll
       # Publish as a single fresh commit so monthly refreshes of ~600 MB of
       # tiles don't pile up in the branch's history. PR previews (pr-preview/,

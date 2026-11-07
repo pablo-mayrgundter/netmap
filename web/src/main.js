@@ -16,6 +16,8 @@ import { parseTrace, loadLookups, resolveTrace, ipText } from './trace.js';
 import { orbitsQuery, resolveOrbitsSrc } from './orbitsConfig.js';
 import { hashChanges } from './hashParts.js';
 import { nextLineSet, shownLinks } from './lineSet.js';
+import { analytics, track, countBucket } from './analytics.js';
+import { mountConsent } from './consent.js';
 
 // Material Icons (Apache-2.0), the same glyphs as MUI's icons, inlined as SVG.
 import hubIcon from '@material-design-icons/svg/filled/hub.svg?raw';
@@ -119,6 +121,8 @@ const state = {
 if (!hash.has('layout') && hash.has('mode')) state.morph = { cyber: 0, hybrid: 0.5, geo: 1 }[hash.get('mode')] ?? 1;
 const modeOf = (m) => (m < 0.06 ? 'cyber' : m > 0.94 ? 'geo' : 'hybrid');
 state.mode = modeOf(state.morph);
+// Every analytics event says which view it happened in (src/analytics.js).
+analytics.setView(() => ({ mode: state.mode, view: state.view, dataset: state.dataset }));
 
 let G = null; // loaded bundle
 let edgeColor = null; // Uint8Array E*4 (base colours, alpha applied in accessor)
@@ -246,6 +250,15 @@ function setMorph(m) {
     updateRaster(); // tiles exist for cyber, hybrid and geo
   }
   render();
+}
+
+// The mode analytics last heard of. The slider reports where it was let go
+// ('change'), once, not each mode it passed on the way.
+let modeReported = state.mode;
+function reportMode(via) {
+  if (state.mode === modeReported) return;
+  track('mode_change', { mode: state.mode, from: modeReported, via });
+  modeReported = state.mode;
 }
 
 function setBasemap(v) {
@@ -1318,7 +1331,7 @@ function onHover(info) {
 // the route. Clicking empty map stops exploring.
 function onClick(info) {
   const picked = pickedNode(info);
-  if (picked !== null) explore(picked);
+  if (picked !== null) explore(picked, 'click');
   else if (!info.layer) explore(null);
 }
 
@@ -1330,18 +1343,21 @@ function onDoubleClick(info) {
   if (picked === null) return false;
   const filled = state.waypoints.filter((w) => w >= 0).length;
   const waiting = state.waypoints.indexOf(-1);
-  if (waiting >= 0) setWaypoint(waiting, picked);
-  else if (filled <= 1) setWaypoint(0, picked);
-  else return explore(picked), true;
+  if (waiting >= 0) setWaypoint(waiting, picked, { how: 'dblclick' });
+  else if (filled <= 1) setWaypoint(0, picked, { how: 'dblclick' });
+  else return explore(picked, 'dblclick'), true;
   state.explore = null;
   renderInfo();
   render();
   return true;
 }
 
-function explore(node) {
+// `how` the node was picked ('click', 'neighbour', …), for analytics; none
+// for a permalink's.
+function explore(node, how = null) {
   if (node === state.explore) return;
   state.explore = node;
+  if (node !== null && how) track('as_select', { asn: G.asn[node], how, role: 'explore' });
   render();
   renderInfo();
   if (node !== null) setWaypointInfo(node);
@@ -1360,6 +1376,11 @@ function syncSelected() {
   state.selected = w !== undefined && w >= 0 ? w : null;
 }
 
+// Analytics: the route last reported, and where the next one comes from
+// ('search', 'traceroute' or 'permalink').
+let routeKey = '';
+let routeSource = 'search';
+
 function computeRoutes() {
   routes = [];
   pathEdges = [];
@@ -1373,6 +1394,14 @@ function computeRoutes() {
     }
     prev = w;
   });
+  const wps = state.waypoints.filter((w) => w >= 0);
+  const key = wps.join(',');
+  if (wps.length >= 2 && key !== routeKey) {
+    const legs = routes.filter(Boolean);
+    track('route_trace', { source: routeSource, waypoints: wps.length, found: legs.length === wps.length - 1, hops: pathEdges.length });
+  }
+  routeKey = key;
+  routeSource = 'search';
 }
 
 function waypointsChanged() {
@@ -1383,9 +1412,10 @@ function waypointsChanged() {
   renderInfo();
 }
 
-function setWaypoint(k, node, { fly = false } = {}) {
+function setWaypoint(k, node, { fly = false, how = null } = {}) {
   while (state.waypoints.length <= k) state.waypoints.push(-1);
   state.waypoints[k] = node;
+  if (how) track('as_select', { asn: G.asn[node], how, role: 'waypoint', waypoint: k + 1 });
   state.active = k;
   state.expanded = true;
   waypointsChanged();
@@ -1524,7 +1554,7 @@ function renderInfo() {
   for (const li of $('infoCards').querySelectorAll('.wp.full .nbrs li')) {
     li.addEventListener('click', () => {
       const v = Number(li.dataset.i);
-      explore(v);
+      explore(v, 'neighbour');
       flyTo(v);
     });
   }
@@ -1761,31 +1791,41 @@ function wireRow(row) {
   const kOf = () => Number(row.dataset.k);
   let items = [];
   let active = 0;
+  // analytics, per visit to the field: typed something, and picked a result
+  let typed = false;
+  let picked = false;
+  const qLen = () => Math.min(input.value.trim().length, 40);
   const draw = () => {
     list.innerHTML = items
       .map((i, j) => `<li data-i="${i}" class="${j === active ? 'active' : ''}"><span class="asn">AS${G.asn[i]}</span>${esc(G.names[i])}</li>`)
       .join('');
   };
   const pick = (i) => {
+    picked = true;
+    if (typed) track('search', { result: 'hit', q_len: qLen(), results: items.length, rank: Math.max(0, items.indexOf(i)) + 1 });
     items = [];
     list.innerHTML = '';
     input.blur();
-    setWaypoint(kOf(), i, { fly: true });
+    setWaypoint(kOf(), i, { fly: true, how: 'search' });
   };
   input.addEventListener('focus', () => {
     const k = kOf();
     if (k < state.waypoints.length) setActive(k);
     input.select();
+    typed = picked = false;
   });
   input.addEventListener('input', () => {
     const k = kOf();
     // clearing a row's text (or its x) drops its waypoint
     if (!input.value && state.waypoints[k] >= 0) return removeWaypoint(k);
+    typed = !!input.value.trim();
     items = search(input.value);
     active = 0;
     draw();
   });
   input.addEventListener('blur', () => {
+    if (typed && !picked) track('search', { result: 'miss', q_len: qLen(), results: items.length });
+    typed = false;
     list.innerHTML = '';
     const k = kOf();
     if (k === 0 && !input.value.trim() && !state.waypoints.length) openRow(0, false);
@@ -1878,6 +1918,7 @@ function useTrace() {
   state.active = state.waypoints.length - 1;
   state.expanded = true;
   state.explore = null;
+  routeSource = 'traceroute';
   waypointsChanged();
   for (const v of state.waypoints) setWaypointInfo(v);
   flyToRoute();
@@ -1988,6 +2029,7 @@ function clearRoute() {
   traceResult = null;
   pathEdges = [];
   routes = [];
+  routeKey = '';
   syncRows();
   $('infoCards').innerHTML = '';
   layoutCards();
@@ -2005,6 +2047,7 @@ function applyHash() {
   for (const p of PARAMS) state[p[0]] = readParam(p);
   if (!h.has('layout') && h.has('mode')) state.morph = { cyber: 0, hybrid: 0.5, geo: 1 }[h.get('mode')] ?? 1;
   state.mode = modeOf(state.morph);
+  modeReported = state.mode; // an edited link isn't a mode change of the viewer's
   if (state.basemap !== prev.basemap) {
     setBaseStyle(); // with the raster layer the new state asks for
   } else if (state.mode !== prev.mode || state.renderer !== prev.renderer || state.backboneOnly !== prev.backboneOnly) {
@@ -2026,7 +2069,7 @@ function applyHash() {
     state.dataset = $('dataset').value = data;
     clearRoute();
     applyControls();
-    load(data, h); // which applies the hash's route
+    load(data, h, 'hash'); // which applies the hash's route
     return;
   }
   if (loading) loadRoute = h; // the load in flight applies the latest route, on its map
@@ -2053,9 +2096,10 @@ function applyControls() {
 
 function wireControls() {
   $('morph').addEventListener('input', (e) => setMorph(Number(e.target.value) / 100));
+  $('morph').addEventListener('change', () => reportMode('slider'));
   $('mode').addEventListener('click', (e) => {
     const v = e.target.dataset?.v;
-    if (v) setMorph({ cyber: 0, hybrid: 0.5, geo: 1 }[v]);
+    if (v) setMorph({ cyber: 0, hybrid: 0.5, geo: 1 }[v]), reportMode('button');
   });
   $('view').addEventListener('click', (e) => {
     const v = e.target.dataset?.v;
@@ -2067,19 +2111,27 @@ function wireControls() {
       globeZoom = zoom; // link opacity follows the globe's zoom; keep it in sync
     }
     state.view = v;
+    track('globe_toggle', { to: v });
     render();
   });
-  $('basemap').addEventListener('change', (e) => setBasemap(e.target.value));
+  $('basemap').addEventListener('change', (e) => {
+    setBasemap(e.target.value);
+    track('basemap_change', { basemap: e.target.value });
+  });
   $('renderer').addEventListener('change', (e) => {
     state.renderer = e.target.value;
     updateRaster();
     render();
+    track('renderer_change', { renderer: e.target.value });
   });
-  const slider = (id, key) =>
+  // Sliders report on release ('change'), not on every tick ('input').
+  const slider = (id, key) => {
     $(id).addEventListener('input', (e) => {
       state[key] = Number(e.target.value) / 100;
       render();
     });
+    $(id).addEventListener('change', () => track('style_change', { control: key }));
+  };
   slider('edgeAlpha', 'edgeAlpha');
   slider('nodeSize', 'nodeSize');
   slider('altitude', 'altitude');
@@ -2096,13 +2148,16 @@ function wireControls() {
       state[key] = e.target.checked;
       if (key === 'backboneOnly') updateRaster();
       render();
+      track('style_change', { control: key, on: e.target.checked });
     });
   }
-  for (const id of ['orbits', 'orbitSats', 'orbitStarlink', 'orbitIridium', 'orbitDsn']) {
+  const orbitLayer = { orbits: 'orbits', orbitSats: 'sats', orbitStarlink: 'starlink', orbitIridium: 'iridium', orbitDsn: 'dsn' };
+  for (const id of Object.keys(orbitLayer)) {
     $(id).checked = state[id];
     $(id).addEventListener('change', (e) => {
       state[id] = e.target.checked;
       render();
+      track('orbits_toggle', { layer: orbitLayer[id], on: e.target.checked });
     });
   }
   $('panelMin').addEventListener('click', () => setCard('panelOpen', false));
@@ -2115,7 +2170,7 @@ function wireControls() {
     state.dataset = e.target.value;
     clearRoute();
     writeHash(); // the new dataset, without the old one's route
-    load(state.dataset); // no route: the hash's was for the old map
+    load(state.dataset, null, 'picker'); // no route: the hash's was for the old map
   });
   map.on('moveend', writeHashSoon); // flight keys move every frame
   map.on('zoom', renderSoon);
@@ -2137,7 +2192,7 @@ function wireControls() {
   window.addEventListener('keydown', (e) => {
     if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
     const stops = { 1: 0, 2: 0.5, 3: 1 };
-    if (stops[e.key] !== undefined) setMorph(stops[e.key]);
+    if (stops[e.key] !== undefined) setMorph(stops[e.key]), reportMode('key');
     else if (e.key === 'g') {
       $('view').querySelector(`[data-v="${state.view === 'globe' ? 'map' : 'globe'}"]`).click();
     } else if (e.key === 'Escape') {
@@ -2426,7 +2481,9 @@ let loadGen = 0;
 let loading = false;
 let loadRoute = null; // URLSearchParams, or null for no route
 
-async function load(id, route = null) {
+// `trigger`, for analytics: 'boot', 'picker' (the dataset menu) or 'hash'.
+async function load(id, route = null, trigger = 'boot') {
+  const t0 = performance.now();
   const gen = ++loadGen;
   loading = true;
   loadRoute = route;
@@ -2444,6 +2501,7 @@ async function load(id, route = null) {
   if (gen !== loadGen) return; // a later load replaced this one
   loading = false;
   G = g;
+  track('dataset_load', { dataset_id: id, kind: g.meta.kind, nodes: countBucket(g.meta.counts?.nodes ?? g.n), load_ms: Math.round(performance.now() - t0), trigger });
   tilesMeta = tiles;
   rankCum = null;
   routeLF = null;
@@ -2496,6 +2554,7 @@ function applySelection(h) {
     .filter((v) => v !== undefined);
   if (nodes.length) {
     nodes.forEach((v, k) => (state.waypoints[k] = v));
+    routeSource = 'permalink';
     const at = Number(h.get('at'));
     state.active = Number.isInteger(at) && at >= 1 && at <= nodes.length ? at - 1 : nodes.length - 1;
     state.expanded = h.get('open') !== '0';
@@ -2515,6 +2574,7 @@ async function boot() {
   applyControls();
   wireSearch();
   layoutCards();
+  mountConsent(analytics, { link: $('privacyLink') });
   const sets = await listDatasets(DATA_BASE);
   if (!sets.length) {
     $('stats').innerHTML = 'No datasets found. Run <code>python -m netmap build</code> first (see README).';
@@ -2525,6 +2585,8 @@ async function boot() {
     .join('');
   if (!state.dataset || !sets.some((s) => s.id === state.dataset)) state.dataset = sets[0].id;
   $('dataset').value = state.dataset;
+  // what the link carries, not its values
+  if (location.hash.length > 1) track('permalink_open', { has_route: hash.has('as'), has_sel: hash.has('sel'), has_camera: hash.has('lon'), dataset_id: state.dataset });
   map.on('load', () => updateRaster());
   await load(state.dataset, hash);
 }

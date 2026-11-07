@@ -472,6 +472,50 @@ draws the full graph directly. SVG isn't viable at 350k+ links, but WebGL
 handles it at interactive rates. The raster tiles are for embedding and for
 static hosting without JavaScript-heavy clients.
 
+## Analytics
+
+The viewer can count how it's used with Google Analytics 4. It's **off by
+default** and **opt-in**: nothing loads unless the build has a measurement ID
+and the viewer clicks *Allow analytics* in the small prompt at the bottom of
+the page. *No thanks* drops everything, and the choice is remembered in
+`localStorage`. *Privacy*, at the foot of the controls card, opens the prompt
+again to change it. With Do Not Track or Global Privacy Control set, netmap
+never asks and never loads the tag.
+
+What's sent (`web/src/analytics.js`): Consent Mode v2 starts with ads and
+analytics storage denied, and *Allow* grants analytics storage only. Google
+signals and ad personalisation are off. The page is sent as its origin and
+path: never the query, and never the hash, which holds the whole view. Each
+event instead carries `view`, the mode, map or globe, and dataset, as in
+`geo:globe:internet`. Parameters are names, ids, ASNs and counts. Nothing you
+type is sent, only the search's length and whether it found something.
+
+| event | params |
+| --- | --- |
+| `dataset_load` | `dataset_id`, `kind` (as, routers), `nodes` (`lt1k` … `gte1m`), `load_ms`, `trigger` (boot, picker, hash) |
+| `permalink_open` | `has_route`, `has_sel`, `has_camera`, `dataset_id`: opened with a hash |
+| `mode_change` | `mode`, `from` (cyber, hybrid, geo), `via` (slider on release, button, key) |
+| `globe_toggle` | `to` (map, globe) |
+| `as_select` | `asn`, `how` (search, click, dblclick, neighbour), `role` (waypoint, explore), `waypoint` |
+| `search` | `result` (hit, miss), `q_len`, `results`, `rank` |
+| `route_trace` | `source` (search, traceroute, permalink), `waypoints`, `found`, `hops` |
+| `orbits_toggle` | `layer` (orbits, sats, starlink, iridium, dsn), `on` |
+| `basemap_change`, `renderer_change` | `basemap`, `renderer` |
+| `style_change` | `control`, `on` (sliders report on release) |
+| `app_open` | `app_id` |
+
+To turn it on, set the repository variable `GA_MEASUREMENT_ID` (**Settings →
+Secrets and variables → Actions → Variables**) to the stream's `G-…` ID.
+`pages.yml` builds with it as `VITE_GA_MEASUREMENT_ID`, and PR previews
+don't, so they stay out of the data. In the GA4 data stream's *Enhanced
+measurement*, turn off *Page changes based on browser history events*:
+netmap rewrites its hash as you move, and those page views would carry it.
+Locally, a dev server stays off unless it's asked to:
+`VITE_GA_MEASUREMENT_ID=G-… npm run dev` and open `?ga_debug=1`, which also
+shows the events in GA's DebugView. `VITE_GA_FORCE=1` turns it on for a
+dev server or test build without the query. Other code records events with `track(name, params)` from
+`web/src/analytics.js`, a no-op until the viewer allows it.
+
 ## Deploying
 
 Everything is served statically from the `gh-pages` branch:
