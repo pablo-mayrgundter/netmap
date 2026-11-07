@@ -1,0 +1,48 @@
+{
+ "messages": [
+  [
+   "info",
+   "Results exclude routes with very low visibility (less than 10 RIS full-feed peers seeing)."
+  ]
+ ],
+ "version": "3.4",
+ "data_call_name": "routing-status",
+ "status": "ok",
+ "status_code": 200,
+ "time": "2026-11-07T00:51:05.044476",
+ "data": {
+  "first_seen": {
+   "prefix": "63.86.169.0/24",
+   "origin": "14593",
+   "time": "2000-08-18T08:00:00"
+  },
+  "last_seen": {
+   "prefix": "2605:59c0:53fe::/48",
+   "origin": "14593",
+   "time": "2026-11-06T16:00:00"
+  },
+  "visibility": {
+   "v4": {
+    "ris_peers_seeing": 321,
+    "total_ris_peers": 321
+   },
+   "v6": {
+    "ris_peers_seeing": 312,
+    "total_ris_peers": 312
+   }
+  },
+  "announced_space": {
+   "v4": {
+    "prefixes": 2173,
+    "ips": 985088
+   },
+   "v6": {
+    "prefixes": 1056,
+    "48s": 244570
+   }
+  },
+  "observed_neighbours": 314,
+  "resource": "14593",
+  "query_time": "2026-11-06T16:00:00"
+ }
+}

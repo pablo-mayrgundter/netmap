@@ -160,6 +160,18 @@ graph (cone, k-core, upstreams and peers), fly-to, and what's public about
 its routing. More panels are coming (#28). How to write an app, and the `ctx`
 interface apps build on, are in [`web/src/apps/README.md`](web/src/apps/README.md).
 
+**Starlink's BGP** (measured, from RIPE RIS's route collectors, called from
+the browser): RIPEstat's announced prefixes (by PoP, through Starlink's
+geofeed), its neighbours either side with their power (on-map ones are
+clickable), how many RIS peers see it, and a year of prefix counts. Below
+it, a **live feed** from [RIS Live](https://ris-live.ripe.net/manual/): each
+UPDATE with AS14593 in its path, and each withdrawal of one of its
+prefixes, with the prefix's PoP and the AS path; each flashes its path on
+the map. The feed is off until you start it (`starlink.live=1` in the
+permalink), since it streams about a thousand updates a minute; it closes
+while the tab is hidden and reconnects with backoff. The code is in
+`web/src/apps/starlink/bgp/`.
+
 ## Orbits: satellites and space networks on the globe
 
 The **orbits** control (globe only, off by default) draws the Earth's
@@ -424,6 +436,7 @@ cd web && npm run build && python3 -m http.server 5481 --directory dist
 | Starlink's [geofeed](https://geoip.starlinkisp.net/feed.csv) and [PoP list](https://geoip.starlinkisp.net/pops.csv) | Starlink PoPs, prefixes, regions; AS14593's sites | published by Starlink, no licence stated |
 | [OurAirports](https://ourairports.com/data/) airports, regions, countries | Starlink PoP and region locations | public domain |
 | [clarkzjw/starlink-geoip-data](https://github.com/clarkzjw/starlink-geoip-data) | the previous Starlink snapshot, for the diff | CC BY-SA 4.0 |
+| [RIPEstat](https://stat.ripe.net/) and [RIS Live](https://ris-live.ripe.net/) (RIPE NCC's RIS), live from the browser | the Starlink app's BGP: prefixes, neighbours, visibility, live updates | RIPE NCC terms of use, attribution |
 
 ip-location-db is pulled from the npm registry because it's mirrored
 everywhere, including sandboxes that can't reach CAIDA or the CDNs.

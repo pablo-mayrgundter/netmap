@@ -4,12 +4,13 @@
 
 import { esc, fmt } from '../util.js';
 import { STARLINK_ASN, starlinkSummary } from './summary.js';
+import * as bgp from './bgp/section.js';
 
 // The sections, in panel order. Each is a module with mount(el, ctx),
 // unmount() and, optionally, onHash(params); it gets its own element and
 // shares the app's ctx (so its hash keys are starlink.<key>, its layer
 // groups the app's: pick names that don't collide).
-const SECTIONS = [];
+const SECTIONS = [bgp];
 
 let ctx = null;
 let root = null; // the summary's element
