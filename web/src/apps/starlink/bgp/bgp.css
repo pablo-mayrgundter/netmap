@@ -45,7 +45,7 @@ svg.slbgp-spark .v6 { stroke: #c49bff; opacity: 0.8; }
 .slbgp-kind.a { color: #05070c; background: rgb(110, 231, 255); }
 .slbgp-kind.w { color: #05070c; background: rgb(255, 122, 92); }
 .apps-body .slbgp-pfx { font-size: 12px; overflow-wrap: anywhere; }
-.slbgp-pop { color: var(--fg); white-space: nowrap; }
+.slbgp-pop { color: var(--fg); white-space: nowrap; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .slbgp-path { display: flex; flex-wrap: wrap; align-items: center; gap: 0 2px; margin-top: 2px; font-size: 11px; font-variant-numeric: tabular-nums; }
 .slbgp-as { color: var(--muted); border: 0; background: none; font: inherit; padding: 0 2px; border-radius: 3px; }
 .slbgp-as.on { color: var(--accent); cursor: pointer; }

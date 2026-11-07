@@ -42,7 +42,7 @@ const FLASH_MS = 2000;
 const FRAME_MS = 200;
 const TIMEOUT = 150_000; // RIPEstat's routing-status takes ~100 s uncached
 const NBR_LIST = 12;
-const RETRY_MS = 20_000;
+const RETRY_MS = 45_000; // and again after twice that
 
 // RIPEstat calls: what each is for, and its shaping. One cache for the page
 // session (and sessionStorage), so reopening the app doesn't call again.
@@ -251,10 +251,12 @@ async function fetchOne(key, force, attempt = 0) {
     if (key === 'announced') noteAnnounced(value);
   } catch (err) {
     if (S !== s || s.ctx.signal.aborted) return;
-    // A network failure (no response: often a slow uncached call cut off on
-    // the way) is retried once, after RIPEstat has had time to cache it.
-    if (err?.name === 'TypeError' && attempt === 0) {
-      setTimeout(() => S === s && fetchOne(key, true, 1), RETRY_MS);
+    // A network failure (no response, or an error page without CORS
+    // headers: a slow uncached call, routing-status takes ~70-100 s, cut
+    // off on the way) is retried twice, once RIPEstat has had time to
+    // finish and cache it.
+    if (err?.name === 'TypeError' && attempt < 2) {
+      setTimeout(() => S === s && fetchOne(key, true, attempt + 1), RETRY_MS * (attempt + 1));
       return;
     }
     const why = err?.message || String(err);
