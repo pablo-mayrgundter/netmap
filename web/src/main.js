@@ -16,6 +16,10 @@ import { parseTrace, loadLookups, resolveTrace, ipText } from './trace.js';
 import { orbitsQuery, resolveOrbitsSrc } from './orbitsConfig.js';
 import { hashChanges } from './hashParts.js';
 import { nextLineSet, shownLinks } from './lineSet.js';
+import { createAppsRegistry } from './apps/index.js';
+import { createAppHost } from './apps/host.js';
+import { composeLayers } from './apps/layers.js';
+import { createSidebar } from './apps/sidebar.js';
 
 // Material Icons (Apache-2.0), the same glyphs as MUI's icons, inlined as SVG.
 import hubIcon from '@material-design-icons/svg/filled/hub.svg?raw';
@@ -26,6 +30,7 @@ import controlPointIcon from '@material-design-icons/svg/filled/control_point.sv
 import closeIcon from '@material-design-icons/svg/filled/close.svg?raw';
 import expandMoreIcon from '@material-design-icons/svg/filled/expand_more.svg?raw';
 import uploadIcon from '@material-design-icons/svg/filled/upload.svg?raw';
+import chevronRightIcon from '@material-design-icons/svg/filled/chevron_right.svg?raw';
 
 const ICONS = {
   hub: hubIcon,
@@ -36,6 +41,7 @@ const ICONS = {
   search: searchIcon,
   control_point: controlPointIcon,
   close: closeIcon,
+  chevron_right: chevronRightIcon,
 };
 for (const el of document.querySelectorAll('[data-icon]')) el.innerHTML = ICONS[el.dataset.icon];
 
@@ -194,6 +200,7 @@ function ensureGlobe() {
     onViewStateChange: ({ viewState }) => {
       globeCam = viewState;
       writeHashSoon();
+      cameraMoved();
       if (Math.abs(viewState.zoom - globeZoom) > 0.05) {
         globeZoom = viewState.zoom;
         renderSoon();
@@ -1244,16 +1251,17 @@ function render() {
   $('globe').hidden = !globeView;
   if (globeView) {
     const deck = ensureGlobe(); // first: it sets globeZoom, which the layers' opacity reads
-    globeLayers = [...earth, ...networkLayers(true)];
+    globeLayers = composeLayers({ base: earth, network: networkLayers(true), apps: appLayers(true) });
     deck.setProps({ layers: [...globeLayers, ...orbitLinkLayers()] });
     overlay.setProps({ layers: [] });
   } else {
-    overlay.setProps({ layers: networkLayers(false), onHover, onClick });
+    overlay.setProps({ layers: composeLayers({ network: networkLayers(false), apps: appLayers(false) }), onHover, onClick });
     if (map.getLayer('base')) map.setPaintProperty('base', 'raster-opacity', basemapOpacity());
   }
   syncOrbits();
   syncControls();
   updateTitle();
+  emitAppEvents();
   writeHashSoon(); // browsers throttle history.replaceState; never per frame
 }
 
@@ -1302,6 +1310,11 @@ function onHover(info) {
     const { anchor } = info.object;
     tip.hidden = false;
     tip.textContent = `AS14593 · ${G.names[STARLINK_NODE()] ?? 'SpaceX'} ↔ ${anchor.name || anchor.id} (${anchor.id}, ${fmt(Math.round(info.object.altKm))} km up)`;
+    tip.style.left = `${info.x + 12}px`;
+    tip.style.top = `${info.y + 12}px`;
+  } else if (info.layer && apps.tooltip(info)) {
+    tip.hidden = false;
+    tip.textContent = apps.tooltip(info);
     tip.style.left = `${info.x + 12}px`;
     tip.style.top = `${info.y + 12}px`;
   } else if (anchor) {
@@ -1631,7 +1644,9 @@ function layoutCards() {
   $('infoFab').hidden = !(sel && !state.detailsOpen);
   const narrow = window.innerWidth <= 720;
   const left = !narrow && state.panelOpen ? $('panel').getBoundingClientRect().right : 0;
-  const right = !narrow && !$('info').hidden ? window.innerWidth - $('info').getBoundingClientRect().left : 0;
+  // the map ends at the apps panel (src/apps/sidebar.js): the info card's room is from there
+  const mapRight = map.getContainer().getBoundingClientRect().right;
+  const right = !narrow && !$('info').hidden ? Math.max(0, mapRight - $('info').getBoundingClientRect().left) : 0;
   // Furthest zoom-out: the world square fits the space between the cards.
   const c = map.getContainer();
   const free = Math.min(c.clientWidth - left - right, c.clientHeight) - 2 * FIT_MARGIN;
@@ -1967,6 +1982,7 @@ function hashParams() {
     h.set('sel', G.asn[state.explore]); // the node being explored
     if (G.meta.kind === 'routers') h.set('selpop', state.explore);
   }
+  apps.writeHash(h); // app=, side= and the open app's own <id>.<key> (src/apps/appHash.js)
   return h;
 }
 
@@ -2001,6 +2017,7 @@ function applyHash() {
   const h = new URLSearchParams(location.hash.slice(1));
   const changed = hashChanges(h, hashParams(), { routers: G?.meta.kind === 'routers' });
   hash = h;
+  apps.applyHash(h); // open or close the app it names, and the app's own params
   const prev = { ...state };
   for (const p of PARAMS) state[p[0]] = readParam(p);
   if (!h.has('layout') && h.has('mode')) state.morph = { cyber: 0, hybrid: 0.5, geo: 1 }[h.get('mode')] ?? 1;
@@ -2118,6 +2135,7 @@ function wireControls() {
     load(state.dataset); // no route: the hash's was for the old map
   });
   map.on('moveend', writeHashSoon); // flight keys move every frame
+  map.on('moveend', cameraMoved);
   map.on('zoom', renderSoon);
   // Double-click a node to search it; elsewhere it still zooms.
   map.on('dblclick', (e) => {
@@ -2140,6 +2158,8 @@ function wireControls() {
     if (stops[e.key] !== undefined) setMorph(stops[e.key]);
     else if (e.key === 'g') {
       $('view').querySelector(`[data-v="${state.view === 'globe' ? 'map' : 'globe'}"]`).click();
+    } else if (e.key === ']') {
+      sidebar.toggle();
     } else if (e.key === 'Escape') {
       // first stop exploring, then clear the route
       if (state.explore !== null) explore(null);
@@ -2279,6 +2299,20 @@ function orbitsNotice(text) {
 // Start, stop, restart (the sub-toggles change the guest's query) or pause
 // the layer to match the state. Cheap when nothing changed: render() calls it.
 function syncOrbits() {
+  syncOrbitsLayer();
+  noteOrbits();
+}
+
+// Tell the apps (ctx.orbits) when the layer comes or goes.
+function noteOrbits() {
+  const on = !!appOrbits();
+  if (on !== noteOrbits.on) {
+    noteOrbits.on = on;
+    apps.emit('orbits');
+  }
+}
+
+function syncOrbitsLayer() {
   const want = orbitsWanted();
   const far = want ? 4 : 1;
   if (globe && far !== globeFar) {
@@ -2333,13 +2367,17 @@ function syncOrbits() {
         syncOrbitsControls();
       },
       onFail: (message) => orbitsFailed(message),
-      onLinks: () => refreshOrbitLinks(),
+      onLinks: () => {
+        refreshOrbitLinks();
+        apps.emit('orbits');
+      },
       perf: orbitsPerf,
       // ?orbits_reproject=0: draw the guest's frames for the view they were rendered for (A/B).
       reproject: params.get('orbits_reproject') !== '0',
     });
     updateOrbitLinkTarget();
     syncOrbitsControls();
+    noteOrbits();
   });
 }
 
@@ -2417,6 +2455,162 @@ function refreshOrbitLinks() {
   if (links.length || had) globe.setProps({ layers: [...globeLayers, ...links] });
 }
 
+// --- apps ----------------------------------------------------------------
+// The apps sidebar (src/apps/, README there): the host holds the open app
+// and its ctx, built on this bridge over main.js's state; the sidebar draws
+// it at the right (a bottom drawer when narrow), and the map reflows to its
+// left. Apps' layers are composed into render()'s on the map and the globe.
+
+// Analytics: every app's ctx.track and the sidebar's events land here. A
+// no-op until web/src/analytics.js (GA4) hooks in.
+// eslint-disable-next-line no-unused-vars
+const track = (name, params = {}) => {};
+
+const apps = createAppHost({
+  registry: createAppsRegistry(),
+  mountPoint: (app) => sidebar.mountPoint(app),
+  bridge: {
+    graph: () => G,
+    dataBase: DATA_BASE,
+    position: (i) => pos(i, [0, 0, 0]),
+    select: (i) => explore(i),
+    flyToNode: (i) => flyTo(i),
+    flyTo: ({ lon, lat, zoom }) => flyToPoint(lon, lat, zoom),
+    fitBounds: (bbox) => fitBbox(bbox),
+    setRoute: (nodes, { fly }) => setRoute(nodes, fly),
+    view: () => appView(),
+    setView: ({ view, mode } = {}) => {
+      if (view === 'map' || view === 'globe') $('view').querySelector(`[data-v="${view}"]`).click();
+      if (mode in MODE_STOPS) setMorph(MODE_STOPS[mode]);
+    },
+    selection: () => ({ explore: state.explore, selected: state.selected }),
+    orbits: () => appOrbits(),
+    clock: () => ({ now: () => (Number.isFinite(ORBITS_T) ? ORBITS_T : Date.now()), live: !Number.isFinite(ORBITS_T) }),
+    redraw: () => renderSoon(),
+    writeHash: () => G && writeHashSoon(), // not before the map: the permalink would lose its data= and route
+    notice: (text) => orbitsNotice(text),
+    track: (name, params) => track(name, params),
+  },
+});
+const MODE_STOPS = { cyber: 0, hybrid: 0.5, geo: 1 };
+
+let focusTimer = 0;
+const sidebar = createSidebar({
+  root: $('apps'),
+  host: apps,
+  onLayout: ({ raised }) => {
+    // narrow: a drawer raised to half the screen or more minimises the
+    // controls and details cards (to their icons), so the map stays in view
+    if (raised && (state.panelOpen || state.detailsOpen)) {
+      state.panelOpen = state.detailsOpen = false;
+      writeHashSoon();
+    }
+    map.resize();
+    layoutCards();
+    clearTimeout(focusTimer);
+    focusTimer = setTimeout(keepFocusVisible, 220); // once the panel's width has landed
+  },
+});
+
+function appView() {
+  const globeView = state.view === 'globe';
+  const c = map.getCenter();
+  const camera = globeView && globeCam
+    ? { lon: globeCam.longitude, lat: globeCam.latitude, zoom: globeCam.zoom + 0.6 }
+    : { lon: c.lng, lat: c.lat, zoom: map.getZoom() };
+  return { view: state.view, mode: state.mode, morph: state.morph, geographic: state.mode === 'geo', camera };
+}
+
+// Each render's apps' layers, { below, above } (src/apps/layers.js).
+function appLayers(globeView) {
+  return apps.layers({ globe: globeView, view: state.view, mode: state.mode, geographic: state.mode === 'geo', zoom: globeView ? globeZoom + 0.6 : map.getZoom() });
+}
+
+// The apps' events, from render(): each only when what it reports changed.
+const emitted = { view: '', selection: '' };
+function emitAppEvents() {
+  const v = `${state.view}|${state.mode}|${state.morph}`;
+  if (v !== emitted.view) (emitted.view = v), apps.emit('view');
+  const s = `${G?.id}|${state.explore}|${state.selected}`;
+  if (s !== emitted.selection) (emitted.selection = s), apps.emit('selection');
+}
+
+let cameraTimer = 0;
+function cameraMoved() {
+  clearTimeout(cameraTimer);
+  cameraTimer = setTimeout(() => apps.emit('camera'), 250);
+}
+
+// The Orbits layer for apps (ctx.orbits): read-only, in lon/lat/alt, or null while it's off.
+function appOrbits() {
+  if (!orbits || orbits.disposed || !orbitsMod || state.view !== 'globe') return null;
+  const R = orbits.earthRadius();
+  const conv = (a) => {
+    const [lon, lat, alt] = orbitsMod.ecefToLngLatAlt(a.ecef, R);
+    return { id: a.id, name: a.name ?? null, kind: a.kind ?? null, lon, lat, altKm: alt / 1000 };
+  };
+  return {
+    anchors: () => orbits.stats.anchors.filter((a) => a.ecef).map(conv),
+    links: () => orbits.links().filter((a) => a.ecef).map(conv),
+    time: () => orbits.stats.anchorsAt || null,
+  };
+}
+
+function flyToPoint(lon, lat, zoom) {
+  if (state.view === 'globe') {
+    globeCam = { longitude: lon, latitude: lat, zoom: zoom !== undefined ? Math.max(0, zoom - 0.6) : Math.max(globeCam?.zoom ?? 0, 2.2), transitionDuration: 1200 };
+    ensureGlobe().setProps({ initialViewState: globeCam });
+    if (Math.abs(globeCam.zoom - globeZoom) > 0.05) (globeZoom = globeCam.zoom), renderSoon();
+  } else {
+    map.flyTo({ center: [lon, lat], zoom: zoom ?? Math.max(map.getZoom(), 5), speed: 1.4 });
+  }
+}
+
+// [west, south, east, north]; west > east crosses the antimeridian.
+function fitBbox([w, s, e, n]) {
+  if (e < w) e += 360;
+  if (state.view === 'globe') {
+    const span = Math.max(e - w, (n - s) * 1.4, 0.5);
+    const lon = (((w + e) / 2 + 540) % 360) - 180;
+    return flyToPoint(lon, (s + n) / 2, Math.max(0.6, Math.min(9, Math.log2(360 / span))));
+  }
+  const pad = map.getPadding();
+  map.fitBounds([[w, s], [e, n]], { padding: { top: 60, bottom: 60, left: pad.left + 40, right: pad.right + 40 }, maxZoom: 9, speed: 1.4 });
+}
+
+function setRoute(nodes, fly) {
+  state.waypoints = nodes.slice();
+  state.active = Math.max(0, nodes.length - 1);
+  state.expanded = true;
+  state.explore = null;
+  waypointsChanged();
+  for (const v of nodes) setWaypointInfo(v);
+  if (fly && nodes.length) flyToRoute();
+}
+
+// The panel or the drawer took room: if the selected node is now under it
+// (or off screen), bring it back into view.
+function keepFocusVisible() {
+  const i = state.explore ?? state.selected;
+  if (!G || i === null) return;
+  const p = pos(i, [0, 0, 0]);
+  const M = 40;
+  if (state.view === 'globe') {
+    const vp = globe?.getViewports()[0];
+    if (!vp || !globeCam) return;
+    const [x, y] = vp.project(p);
+    if (!(x >= M && y >= M && x <= vp.width - M && y <= vp.height - M)) {
+      globeCam = { ...globeCam, longitude: p[0], latitude: p[1], transitionDuration: 500 };
+      globe.setProps({ initialViewState: globeCam });
+    }
+  } else {
+    const c = map.getContainer();
+    const pad = map.getPadding();
+    const { x, y } = map.project([p[0], p[1]]);
+    if (!(x >= pad.left + M && x <= c.clientWidth - pad.right - M && y >= M && y <= c.clientHeight - M)) map.easeTo({ center: [p[0], p[1]], duration: 500 });
+  }
+}
+
 // --- boot ----------------------------------------------------------------
 
 // Loads are superseded, not queued: only the latest one lands, and it applies
@@ -2484,6 +2678,7 @@ async function load(id, route = null) {
 
   if (loadRoute) applySelection(loadRoute);
   loadRoute = null;
+  apps.emit('dataset');
 }
 
 // A permalink's waypoints, as=A,B,… (and pop=… on router maps), and the
@@ -2515,6 +2710,7 @@ async function boot() {
   applyControls();
   wireSearch();
   layoutCards();
+  apps.applyHash(hash); // the app in the permalink opens now, and finds its map when it loads
   const sets = await listDatasets(DATA_BASE);
   if (!sets.length) {
     $('stats').innerHTML = 'No datasets found. Run <code>python -m netmap build</code> first (see README).';
@@ -2544,6 +2740,7 @@ window.netmap = {
   },
   byAsn: (asn) => G.byAsn.get(asn),
   orbits: () => orbits, // the Orbits layer, while it's on (src/orbits.js)
+  apps: () => apps, // the apps' host (src/apps/host.js): apps().ctx() is the open app's ctx
   // the globe's link arcs: the set on screen, and one coming in (perf probes)
   edgeArcs: () => {
     const { screen, pending } = arcSets;

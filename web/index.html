@@ -147,6 +147,23 @@
       <div id="infoCards"></div>
     </aside>
 
+    <!-- right: the apps sidebar (src/apps/). The rail lists the apps; the open one's panel docks
+         at the right (collapsible, resizable by its grip), or is a bottom drawer on narrow screens. -->
+    <aside id="apps" aria-label="Apps">
+      <div class="apps-grip" role="separator" aria-orientation="vertical" aria-label="Apps panel width" tabindex="0"
+        title="Drag to resize (or ← →); double-click for the default width"></div>
+      <button class="apps-handle" type="button" aria-label="Drawer height" title="Drag, or tap for the next height"></button>
+      <nav class="apps-rail" aria-label="Apps"></nav>
+      <header class="apps-head">
+        <h2 id="appsTitle" tabindex="-1"></h2>
+        <button id="appsUp" class="icon-btn" data-icon="expand_less" title="Taller" aria-label="Taller"></button>
+        <button id="appsDown" class="icon-btn" data-icon="expand_more" title="Shorter" aria-label="Shorter"></button>
+        <button id="appsCollapse" class="icon-btn" data-icon="chevron_right" title="Collapse (])" aria-label="Collapse the apps panel"></button>
+        <button id="appsClose" class="icon-btn" data-icon="close" title="Close the app" aria-label="Close the app"></button>
+      </header>
+      <div class="apps-body" role="region" aria-labelledby="appsTitle"><p class="apps-wait muted" hidden>Loading…</p></div>
+    </aside>
+
     <div id="tooltip" hidden></div>
     <div id="notice" role="status" aria-live="polite" hidden></div>
     <script type="module" src="./src/main.js"></script>
