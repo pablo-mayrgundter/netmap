@@ -584,3 +584,58 @@ def test_resite_as_at_its_pops():
     assert p.lat[i] == pytest.approx(34.0) and p.lon[i] == pytest.approx(-118.4)  # LA's 1° cell
     assert [s[3] for s in p.sites[i]] == ["Los Angeles", "Irvine", "Frankfurt"]
     assert not geo.resite(p, 999, starlink.as_sites(pops))
+
+
+def test_starlink_gateways_from_catalog(tmp_path):
+    """NodalArc's sites -> gateways.json: tiers, provenance, the satsim cross-check."""
+    from netmap import cli
+
+    out = tmp_path / "starlink"
+    cli.main(["--cache", str(tmp_path / "raw"), "starlink-gateways", "--out", str(out),
+              "--sites", str(STARLINK_FX / "nodalarc"), "--satsim", str(STARLINK_FX / "satsim-gateways.json")])
+    d = json.loads((out / "gateways.json").read_text())
+    rows = {r["id"]: r for r in d["gateways"]}
+    assert set(rows) == {"us-conrad", "us-sanderson", "us-redmond", "nz-awarua", "jp-akita"}
+    c = rows["us-conrad"]
+    assert (c["tier"], c["located"], c["filing"], c["country"]) == ("filing", "filing", "SES-LIC-20190816-01062", "US")
+    assert c["filing_url"] == "https://fcc.report/IBFS/SES-LIC-20190816-01062"
+    assert (c["lat"], c["lon"], c["antennas"]) == (48.203306, -111.945278, 8)
+    assert c["cross_check"] == {"source": "satsim", "by": "filing", "km": 0.0}
+    # Its coordinates came from a geocoder, not the filing; satsim's are 48 km off (a typo there).
+    s = rows["us-sanderson"]
+    assert (s["tier"], s["located"]) == ("filing", "town") and s["cross_check"]["km"] > 40
+    # A later licence (SES-MOD) for an early site: matched by place.
+    assert rows["us-redmond"]["cross_check"]["by"] == "position"
+    assert rows["us-redmond"]["cross_check"]["km"] < 0.1
+    a = rows["nz-awarua"]
+    assert (a["tier"], a["located"], a["filing"], a["filing_url"], a["country"]) == ("reported", "town", None, None, "NZ")
+    assert [r["tier"] for r in d["gateways"]] == ["filing"] * 3 + ["reported"] * 2  # filings first
+    assert d["excluded"] == {"city_estimate": 1, "no_source": 1, "not_a_starlink_gateway": 2}
+    assert d["counts"] == {"gateways": 5, "filing": 3, "reported": 2, "countries": 3, "cross_checked": 3}
+    assert d["sources"]["nodalarc"]["licence"] == "Apache-2.0" and d["sources"]["nodalarc"]["sites_read"] == 9
+    assert d["sources"]["satsim"]["licence"] == "BSD-2-Clause" and len(d["sources"]["satsim"]["sha256"]) == 64
+
+
+def test_starlink_gateways_without_crosscheck(tmp_path):
+    from netmap import starlink_space
+
+    doc = starlink_space.run_gateways(tmp_path, tmp_path / "raw", sites=str(STARLINK_FX / "nodalarc"),
+                                      satsim="none", log=lambda *a: None)
+    assert doc["sources"]["satsim"] is None and doc["counts"]["cross_checked"] == 0
+    assert all(r["cross_check"] is None for r in doc["gateways"])
+
+
+def test_starlink_gp_snapshot(tmp_path):
+    """CelesTrak's GP JSON -> gp.json's columns, without the records SGP4 can't use."""
+    from netmap import cli
+
+    cli.main(["--cache", str(tmp_path / "raw"), "starlink-gp", "--out", str(tmp_path),
+              "--gp", str(STARLINK_FX / "gp.json")])
+    d = json.loads((tmp_path / "gp.json").read_text())
+    assert d["kind"] == "starlink-gp" and d["count"] == 2
+    f = d["fields"]
+    assert f[:4] == ["OBJECT_NAME", "OBJECT_ID", "NORAD_CAT_ID", "EPOCH"]
+    rows = [dict(zip(f, r)) for r in d["rows"]]
+    assert [r["NORAD_CAT_ID"] for r in rows] == [44714, 49118]
+    assert rows[0]["MEAN_MOTION"] == 15.6823168 and rows[1]["OBJECT_ID"] == "2021-082A"
+    assert d["epochs"] == {"min": "2026-11-06T10:00:00.000000", "max": "2026-11-06T21:31:12.123456"}

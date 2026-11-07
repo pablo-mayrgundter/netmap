@@ -54,6 +54,8 @@ jobs:
         run: |
           pip install -e "pipeline[itdk]"
           python -m netmap starlink || echo "::warning::Starlink geofeed unavailable; preview built without Starlink data"
+          python -m netmap starlink-gateways || echo "::warning::gateway catalog unavailable; preview built without gateways"
+          python -m netmap starlink-gp || echo "::warning::CelesTrak unavailable; preview built without an elements snapshot"
           python -m netmap build --topology caida --name internet
           python -m netmap build-itdk --name routers
           python -m netmap tiles web/public/data/internet --format webp --maxzoom 3

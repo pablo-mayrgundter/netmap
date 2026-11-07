@@ -65,6 +65,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python -m netmap starlink
+      # Gateway sites and a CelesTrak elements snapshot for the modelled links
+      # (the browser fetches fresher elements itself when it can).
+      - name: Starlink gateways and elements
+        continue-on-error: true
+        run: |
+          python -m netmap starlink-gateways
+          python -m netmap starlink-gp
       - name: Build CAIDA map bundles
         run: |
           python -m netmap build --topology caida --name internet
