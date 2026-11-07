@@ -66,13 +66,13 @@ follows the light of the links it replaces. Member links are hidden. The
 650 km), and hovering a fiber shows its transit/peering counts. It works in
 cyber mode too, where it bundles links between nearby clusters.
 
-Keys: `1` cyber · `2` hybrid · `3` geo (jumps on the layout slider) · `g` globe · `/` search · `Esc` stop
-exploring, then clear the route. Camera (hold): `↑`/`↓` pitch, `←`/`→` rotate,
+Keys: `1` cyber · `2` hybrid · `3` geo (jumps on the layout slider) · `g` globe · `/` search · `]` the
+apps panel · `Esc` stop exploring, then clear the route. Camera (hold): `↑`/`↓` pitch, `←`/`→` rotate,
 `A`/`D` strafe, `W`/`S` zoom; on the globe the arrows orbit. The compass resets
 rotation and pitch.
 The URL hash is a full permalink: every control (layout, view, basemap,
-renderer, sliders, toggles), the dataset, the camera (2D map or globe) and the
-selected AS. Opening a link restores the view exactly, and an edit to the
+renderer, sliders, toggles), the dataset, the camera (2D map or globe), the
+selected AS, and the open app with its own state (`app=starlink`). Opening a link restores the view exactly, and an edit to the
 hash (typed, pasted, or back and forward) applies without a reload; picking
 a dataset from the list starts it without a route. Without a hash the
 viewer starts on the geo globe with backbone, points of presence and
@@ -149,6 +149,24 @@ The cyber layout of the AS map runs on a **backbone**: each AS's primary
 still drawn. Laying out the full graph (`--cyber-graph full`) gives a
 featureless ball, because multihoming and peering tie everything together.
 The provider tree is where the Opte starbursts come from.
+
+## Apps
+
+The **apps sidebar** holds apps that each focus the map on one network. It's
+a panel at the right on desktop (collapsible and resizable, the map reflows
+to its left) and a bottom drawer on phones (peek, half, full). The rail lists
+the apps. The first is **Starlink** (AS14593): its summary from the loaded
+graph (cone, k-core, upstreams and peers), fly-to, and what's public about
+its routing. Its **PoPs** section draws Starlink's PoPs (sized by IPv4
+addresses) and customer regions (coloured by the PoP serving them, with a line
+to it) from [Starlink data](#starlink-data), lists the regions farthest from
+their PoP, and shows AS14593's IXes and facilities, fetched live from
+PeeringDB's API and kept for the session. Click a PoP for its prefixes, IATA
+code and top regions (`starlink.pop=<code>`; `starlink.layer=` picks the map
+layers). The PoP-to-PoP backbone isn't published yet: the section says so,
+and draws one when a source supplies it (`web/src/apps/starlink/pops/backbone.js`).
+More panels are coming (#28). How to write an app, and the `ctx`
+interface apps build on, are in [`web/src/apps/README.md`](web/src/apps/README.md).
 
 ## Orbits: satellites and space networks on the globe
 
@@ -411,6 +429,9 @@ cd web && npm run build && python3 -m http.server 5481 --directory dist
 | [DB-IP lite](https://db-ip.com) city (via ip-location-db) | per-AS geography | CC BY 4.0, attribution required |
 | GeoLite2 city (`--geo geolite2-city`) | alternative geography | MaxMind EULA |
 | OpenFlights airports (`@nwpr/airport-codes`) | hostname → airport geo hints | ODbL |
+| Starlink's [geofeed](https://geoip.starlinkisp.net/feed.csv) and [PoP list](https://geoip.starlinkisp.net/pops.csv) | Starlink PoPs, prefixes, regions; AS14593's sites | published by Starlink, no licence stated |
+| [OurAirports](https://ourairports.com/data/) airports, regions, countries | Starlink PoP and region locations | public domain |
+| [clarkzjw/starlink-geoip-data](https://github.com/clarkzjw/starlink-geoip-data) | the previous Starlink snapshot, for the diff | CC BY-SA 4.0 |
 
 ip-location-db is pulled from the npm registry because it's mirrored
 everywhere, including sandboxes that can't reach CAIDA or the CDNs.
@@ -435,6 +456,102 @@ An AS has a firm location (concentrated) when its concentration is ≥ `--pin-th
 (0.6) and its customer cone is ≤ `--pin-max-cone` (400). Everything bigger or
 more spread out floats, and gets points of presence in geo. Hybrid pins the
 concentrated ASes with at least `--hybrid-pin-degree` layout links.
+
+**Starlink (AS14593)** is the exception. DB-IP puts its addresses where its
+customers are, which for a satellite ISP says little about where the network
+is. When `web/public/data/starlink/pops.json` exists (run `netmap starlink`
+first, as the deploy workflows do), `build` sites AS14593 at its PoPs
+instead, weighted by the IPv4 space Starlink assigns each one
+(`geo.resite`): its main site moves from Atlanta to Miami, its concentration
+drops from 0.24 to 0.05, and its points of presence in geo are its biggest
+PoPs (12 at most, as for any AS). `--starlink-pops <file>` uses another file; `--starlink-pops none` keeps DB-IP's.
+
+## Starlink data
+
+`python -m netmap starlink` writes `web/public/data/starlink/` from Starlink's
+own feeds, for the Starlink app. It takes a few seconds and needs no
+other netmap data:
+
+```sh
+python -m netmap starlink                    # live feeds, cached per day in data/raw/starlink/
+python -m netmap starlink --previous none    # no diff
+python -m netmap starlink --feed feed.csv --pops pops.csv --ourairports ourairports/   # local files
+```
+
+**Sources.** `feed.csv` is Starlink's RFC 8805 geofeed (`prefix,country,region,city,`):
+where the customers on each address block are. `pops.csv`, published since
+October 2025, is `prefix,popcode,iata` (`9.170.0.0/24,lsancax1,lax`): the
+point of presence each block is assigned to. Every `pops.csv` prefix is in the
+feed (so far), but about one feed prefix in ten has no PoP. PoPs are placed at their
+IATA code's airport and regions at a city, region or country point, all from
+[OurAirports](https://ourairports.com/data/) (public domain, cached in
+`data/raw/ourairports/`). Codes with a trailing digit (`atl2`, `pdx2`, second
+PoPs in a metro) are matched without it; metro-area codes (`jkt`) go to the
+area's main airport (CGK). Codes that are neither (`staging2`) leave the PoP
+without a location, and `meta.json` lists them. The diff's previous snapshot
+is from [clarkzjw/starlink-geoip-data](https://github.com/clarkzjw/starlink-geoip-data),
+which archives both feeds a few times a week (CC BY-SA 4.0: attribute it,
+and share derived data under the same licence). By default it's the newest
+snapshot at least 30 days old (`--previous-days`), found through the GitHub
+API (with `GITHUB_TOKEN` if set) or, where that's blocked, a tree-only git
+clone. `--previous <pops.csv>` (and `--previous-feed`) diffs against a file
+instead.
+
+**Files.** All JSON. Lat/lon are degrees (4 decimals), `null` where unknown.
+Prefixes are canonical CIDR strings, IPv4 in address order, then IPv6.
+
+* **`pops.json`**, a list sorted by `code` (its index is the PoP index used
+  below):
+  `{code, iata, airport, located, name, city, country, lat, lon, v4_prefixes,
+  v6_prefixes, v4_addresses, regions: [{id, country, region, city, prefixes}]}`.
+  `iata` is the code as published (`atl2`), `airport` the one used to place it
+  (`ATL`), `located` how (`"iata"`, `"metro"` or `null`), and `name`, `city`,
+  `country` the airport's. `regions` are the feed locations its prefixes
+  serve, most prefixes first; `id` is the index into `regions.json`.
+* **`prefixes.json`**, columnar:
+  `{schema, pops: [code], regions: [[country, region, city]], prefix: [cidr],
+  pop: [int], region: [int]}`. Row `k` is `prefix[k]`, assigned to PoP
+  `pops[pop[k]]` (`-1`: none) and located at `regions[region[k]]` (`-1`: not in
+  the feed). `pops` and `regions` are in the same order as `pops.json` and
+  `regions.json`. About 120 KB, 23 KB gzipped.
+* **`regions.json`**, one entry per distinct feed `(country, region, city)`,
+  sorted by those: `{id, country, country_name, region, region_name, city, lat,
+  lon, precision, v4_prefixes, v6_prefixes, v4_addresses, pops: [{pop, code,
+  prefixes}], no_pop_prefixes}`. `precision` says what the point is: `"city"`
+  (an airport in a town of that name, or with it in its keywords), `"region"`
+  or `"country"` (the mean of that ISO 3166-2 region's or country's airports),
+  or `null`. In November 2026, 294 of 327 were cities, 14 regions, 16
+  countries and 3 unplaced (Pitcairn, Svalbard, Tokelau).
+* **`meta.json`**: `{schema, kind: "starlink", name, asn, fetched_at,
+  generated, sources: {feed, pops, ourairports_*: {url, sha256, bytes,
+  fetched_at, rows?, skipped?}}, counts, unmatched: {iata: [{code, iata,
+  prefixes}], regions: [{country, region, city}]}, diff, diff_error, files,
+  attribution, caveats}`. `diff` is `null` without a previous snapshot (and
+  `diff_error` says why), else `{previous: {snapshot, pops, feed}, pops_added,
+  pops_removed, pop_prefix_counts: [{code, before, after}], prefixes_assigned,
+  prefixes_unassigned, prefixes_moved, moves: [{from, to, prefixes}], moved:
+  [[prefix, from, to]], moved_truncated, feed: {prefixes_added,
+  prefixes_removed, prefixes_relocated}}`.
+
+In November 2026: 66 PoPs (65 placed), 4,548 prefixes (3,632 IPv4 and 916
+IPv6, 883k IPv4 addresses), 4,095 of them with a PoP, in 327 locations in
+224 countries and territories.
+
+**Caveats.**
+
+* A prefix's PoP is where Starlink assigns that block. It does not reliably
+  predict which PoP a given user's traffic leaves through.
+* Before October 2025 there was no PoP list. PoP mappings from then (such as
+  clarkzjw's `geoip/` snapshots) came from DNS PTR records, which were often
+  stale, so a diff across that date compares different methods.
+* The feed's city is the market a block is sold into, not always a town
+  (mines such as Meliadine, Starbase, "Mawson Peak"), and a few are
+  misspelt. Customers can be far from it.
+* A PoP is drawn at its airport, not at the facility.
+
+`ci.yml` never fetches any of it: the tests run the command on a dozen-row
+fixture in `pipeline/tests/fixtures/starlink/`. `pages.yml` and
+`preview.yml` fetch the live feeds before building the map.
 
 ## Outputs
 
@@ -472,6 +589,52 @@ draws the full graph directly. SVG isn't viable at 350k+ links, but WebGL
 handles it at interactive rates. The raster tiles are for embedding and for
 static hosting without JavaScript-heavy clients.
 
+## Analytics
+
+The viewer can count how it's used with Google Analytics 4. It's **off by
+default** and **opt-in**: nothing loads unless the build has a measurement ID
+and the viewer clicks *Allow analytics* in the small prompt at the bottom of
+the page. *No thanks* drops everything, and the choice is remembered in
+`localStorage`. *Privacy*, at the foot of the controls card, opens the prompt
+again to change it. With Do Not Track or Global Privacy Control set, netmap
+never asks and never loads the tag.
+
+What's sent (`web/src/analytics.js`): Consent Mode v2 starts with ads and
+analytics storage denied, and *Allow* grants analytics storage only. Google
+signals and ad personalisation are off. The page is sent as its origin and
+path: never the query, and never the hash, which holds the whole view. Each
+event instead carries `view`, the mode, map or globe, and dataset, as in
+`geo:globe:internet`. Parameters are names, ids, ASNs and counts. Nothing you
+type is sent, only the search's length and whether it found something.
+
+| event | params |
+| --- | --- |
+| `dataset_load` | `dataset_id`, `kind` (as, routers), `nodes` (`lt1k` … `gte1m`), `load_ms`, `trigger` (boot, picker, hash) |
+| `permalink_open` | `has_route`, `has_sel`, `has_camera`, `dataset_id`: opened with a hash |
+| `mode_change` | `mode`, `from` (cyber, hybrid, geo), `via` (slider on release, button, key) |
+| `globe_toggle` | `to` (map, globe) |
+| `as_select` | `asn`, `how` (search, click, dblclick, neighbour), `role` (waypoint, explore), `waypoint` |
+| `search` | `result` (hit, miss), `q_len`, `results`, `rank` |
+| `route_trace` | `source` (search, traceroute, permalink), `waypoints`, `found`, `hops` |
+| `orbits_toggle` | `layer` (orbits, sats, starlink, iridium, dsn), `on` |
+| `basemap_change`, `renderer_change` | `basemap`, `renderer` |
+| `style_change` | `control`, `on` (sliders report on release) |
+| `app_open` | `app_id` |
+
+The site's GA4 stream is `G-3PWPNFW02J` (a measurement ID is public: it's in
+every page that loads the tag). `pages.yml` builds with it as
+`VITE_GA_MEASUREMENT_ID`; the repository variable `GA_MEASUREMENT_ID`
+(**Settings → Secrets and variables → Actions → Variables**) overrides it, for
+a fork or another stream. PR previews build without it, so they stay out of
+the data. In the GA4 data stream's *Enhanced
+measurement*, turn off *Page changes based on browser history events*:
+netmap rewrites its hash as you move, and those page views would carry it.
+Locally, a dev server stays off unless it's asked to:
+`VITE_GA_MEASUREMENT_ID=G-… npm run dev` and open `?ga_debug=1`, which also
+shows the events in GA's DebugView. `VITE_GA_FORCE=1` turns it on for a
+dev server or test build without the query. Other code records events with `track(name, params)` from
+`web/src/analytics.js`, a no-op until the viewer allows it.
+
 ## Deploying
 
 Everything is served statically from the `gh-pages` branch:
@@ -485,7 +648,9 @@ Everything is served statically from the `gh-pages` branch:
   on the PR. The preview is removed when the PR closes. Each preview builds
   its own CAIDA bundle and shallow tiles, about 2 minutes, so pipeline
   changes show up too.
-* `ci.yml` runs the pipeline tests and the viewer build.
+* Both deploy workflows run `netmap starlink` (Starlink's live feeds) before
+  the map build.
+* `ci.yml` runs the pipeline tests and the viewer build. It fetches nothing.
 
 One-time setup: **Settings → Pages → Build and deployment → Source: Deploy
 from a branch → `gh-pages` / `(root)`**. The branch is created by the first

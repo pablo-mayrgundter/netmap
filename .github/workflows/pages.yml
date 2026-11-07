@@ -51,6 +51,15 @@ jobs:
           path: data/raw/itdk-*
           key: itdk-v1
       - run: pip install -e "pipeline[itdk]"
+      # Starlink's own geofeeds (web/public/data/starlink/), first so the map
+      # build sites AS14593 at its PoPs. The token is for listing the archive
+      # the diff's previous snapshot comes from. If Starlink's feed is down,
+      # the site still deploys, just without the Starlink data.
+      - name: Starlink PoPs and prefixes
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python -m netmap starlink
       - name: Build CAIDA map bundles
         run: |
           python -m netmap build --topology caida --name internet
@@ -64,6 +73,10 @@ jobs:
           du -sh web/public/data/internet/tiles/*
       - name: Build viewer
         working-directory: web
+        env:
+          # Google Analytics (README: Analytics); unset builds no tag. Not in
+          # preview.yml, so PR previews stay out of the data.
+          VITE_GA_MEASUREMENT_ID: ${{ vars.GA_MEASUREMENT_ID || 'G-3PWPNFW02J' }}
         run: npm ci && npm run build && touch dist/.nojekyll
       # Publish as a single fresh commit so monthly refreshes of ~600 MB of
       # tiles don't pile up in the branch's history. PR previews (pr-preview/,

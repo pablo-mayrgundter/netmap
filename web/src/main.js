@@ -16,6 +16,12 @@ import { parseTrace, loadLookups, resolveTrace, ipText } from './trace.js';
 import { orbitsQuery, resolveOrbitsSrc } from './orbitsConfig.js';
 import { hashChanges } from './hashParts.js';
 import { nextLineSet, shownLinks } from './lineSet.js';
+import { createAppsRegistry } from './apps/index.js';
+import { createAppHost } from './apps/host.js';
+import { composeLayers } from './apps/layers.js';
+import { createSidebar } from './apps/sidebar.js';
+import { analytics, track, countBucket } from './analytics.js';
+import { mountConsent } from './consent.js';
 
 // Material Icons (Apache-2.0), the same glyphs as MUI's icons, inlined as SVG.
 import hubIcon from '@material-design-icons/svg/filled/hub.svg?raw';
@@ -26,6 +32,7 @@ import controlPointIcon from '@material-design-icons/svg/filled/control_point.sv
 import closeIcon from '@material-design-icons/svg/filled/close.svg?raw';
 import expandMoreIcon from '@material-design-icons/svg/filled/expand_more.svg?raw';
 import uploadIcon from '@material-design-icons/svg/filled/upload.svg?raw';
+import chevronRightIcon from '@material-design-icons/svg/filled/chevron_right.svg?raw';
 
 const ICONS = {
   hub: hubIcon,
@@ -36,6 +43,7 @@ const ICONS = {
   search: searchIcon,
   control_point: controlPointIcon,
   close: closeIcon,
+  chevron_right: chevronRightIcon,
 };
 for (const el of document.querySelectorAll('[data-icon]')) el.innerHTML = ICONS[el.dataset.icon];
 
@@ -119,6 +127,8 @@ const state = {
 if (!hash.has('layout') && hash.has('mode')) state.morph = { cyber: 0, hybrid: 0.5, geo: 1 }[hash.get('mode')] ?? 1;
 const modeOf = (m) => (m < 0.06 ? 'cyber' : m > 0.94 ? 'geo' : 'hybrid');
 state.mode = modeOf(state.morph);
+// Every analytics event says which view it happened in (src/analytics.js).
+analytics.setView(() => ({ mode: state.mode, view: state.view, dataset: state.dataset }));
 
 let G = null; // loaded bundle
 let edgeColor = null; // Uint8Array E*4 (base colours, alpha applied in accessor)
@@ -194,6 +204,7 @@ function ensureGlobe() {
     onViewStateChange: ({ viewState }) => {
       globeCam = viewState;
       writeHashSoon();
+      cameraMoved();
       if (Math.abs(viewState.zoom - globeZoom) > 0.05) {
         globeZoom = viewState.zoom;
         renderSoon();
@@ -246,6 +257,15 @@ function setMorph(m) {
     updateRaster(); // tiles exist for cyber, hybrid and geo
   }
   render();
+}
+
+// The mode analytics last heard of. The slider reports where it was let go
+// ('change'), once, not each mode it passed on the way.
+let modeReported = state.mode;
+function reportMode(via) {
+  if (state.mode === modeReported) return;
+  track('mode_change', { mode: state.mode, from: modeReported, via });
+  modeReported = state.mode;
 }
 
 function setBasemap(v) {
@@ -1244,16 +1264,17 @@ function render() {
   $('globe').hidden = !globeView;
   if (globeView) {
     const deck = ensureGlobe(); // first: it sets globeZoom, which the layers' opacity reads
-    globeLayers = [...earth, ...networkLayers(true)];
+    globeLayers = composeLayers({ base: earth, network: networkLayers(true), apps: appLayers(true) });
     deck.setProps({ layers: [...globeLayers, ...orbitLinkLayers()] });
     overlay.setProps({ layers: [] });
   } else {
-    overlay.setProps({ layers: networkLayers(false), onHover, onClick });
+    overlay.setProps({ layers: composeLayers({ network: networkLayers(false), apps: appLayers(false) }), onHover, onClick });
     if (map.getLayer('base')) map.setPaintProperty('base', 'raster-opacity', basemapOpacity());
   }
   syncOrbits();
   syncControls();
   updateTitle();
+  emitAppEvents();
   writeHashSoon(); // browsers throttle history.replaceState; never per frame
 }
 
@@ -1304,6 +1325,11 @@ function onHover(info) {
     tip.textContent = `AS14593 · ${G.names[STARLINK_NODE()] ?? 'SpaceX'} ↔ ${anchor.name || anchor.id} (${anchor.id}, ${fmt(Math.round(info.object.altKm))} km up)`;
     tip.style.left = `${info.x + 12}px`;
     tip.style.top = `${info.y + 12}px`;
+  } else if (info.layer && apps.tooltip(info)) {
+    tip.hidden = false;
+    tip.textContent = apps.tooltip(info);
+    tip.style.left = `${info.x + 12}px`;
+    tip.style.top = `${info.y + 12}px`;
   } else if (anchor) {
     tip.hidden = false;
     tip.textContent = `${ANCHOR_KIND[anchor.kind] ?? anchor.kind ?? 'Anchor'} · ${anchor.name || anchor.id} (${anchor.id})`;
@@ -1318,7 +1344,7 @@ function onHover(info) {
 // the route. Clicking empty map stops exploring.
 function onClick(info) {
   const picked = pickedNode(info);
-  if (picked !== null) explore(picked);
+  if (picked !== null) explore(picked, 'click');
   else if (!info.layer) explore(null);
 }
 
@@ -1330,18 +1356,21 @@ function onDoubleClick(info) {
   if (picked === null) return false;
   const filled = state.waypoints.filter((w) => w >= 0).length;
   const waiting = state.waypoints.indexOf(-1);
-  if (waiting >= 0) setWaypoint(waiting, picked);
-  else if (filled <= 1) setWaypoint(0, picked);
-  else return explore(picked), true;
+  if (waiting >= 0) setWaypoint(waiting, picked, { how: 'dblclick' });
+  else if (filled <= 1) setWaypoint(0, picked, { how: 'dblclick' });
+  else return explore(picked, 'dblclick'), true;
   state.explore = null;
   renderInfo();
   render();
   return true;
 }
 
-function explore(node) {
+// `how` the node was picked ('click', 'neighbour', …), for analytics; none
+// for a permalink's.
+function explore(node, how = null) {
   if (node === state.explore) return;
   state.explore = node;
+  if (node !== null && how) track('as_select', { asn: G.asn[node], how, role: 'explore' });
   render();
   renderInfo();
   if (node !== null) setWaypointInfo(node);
@@ -1360,6 +1389,11 @@ function syncSelected() {
   state.selected = w !== undefined && w >= 0 ? w : null;
 }
 
+// Analytics: the route last reported, and where the next one comes from
+// ('search', 'traceroute' or 'permalink').
+let routeKey = '';
+let routeSource = 'search';
+
 function computeRoutes() {
   routes = [];
   pathEdges = [];
@@ -1373,6 +1407,14 @@ function computeRoutes() {
     }
     prev = w;
   });
+  const wps = state.waypoints.filter((w) => w >= 0);
+  const key = wps.join(',');
+  if (wps.length >= 2 && key !== routeKey) {
+    const legs = routes.filter(Boolean);
+    track('route_trace', { source: routeSource, waypoints: wps.length, found: legs.length === wps.length - 1, hops: pathEdges.length });
+  }
+  routeKey = key;
+  routeSource = 'search';
 }
 
 function waypointsChanged() {
@@ -1383,9 +1425,10 @@ function waypointsChanged() {
   renderInfo();
 }
 
-function setWaypoint(k, node, { fly = false } = {}) {
+function setWaypoint(k, node, { fly = false, how = null } = {}) {
   while (state.waypoints.length <= k) state.waypoints.push(-1);
   state.waypoints[k] = node;
+  if (how) track('as_select', { asn: G.asn[node], how, role: 'waypoint', waypoint: k + 1 });
   state.active = k;
   state.expanded = true;
   waypointsChanged();
@@ -1524,7 +1567,7 @@ function renderInfo() {
   for (const li of $('infoCards').querySelectorAll('.wp.full .nbrs li')) {
     li.addEventListener('click', () => {
       const v = Number(li.dataset.i);
-      explore(v);
+      explore(v, 'neighbour');
       flyTo(v);
     });
   }
@@ -1631,7 +1674,9 @@ function layoutCards() {
   $('infoFab').hidden = !(sel && !state.detailsOpen);
   const narrow = window.innerWidth <= 720;
   const left = !narrow && state.panelOpen ? $('panel').getBoundingClientRect().right : 0;
-  const right = !narrow && !$('info').hidden ? window.innerWidth - $('info').getBoundingClientRect().left : 0;
+  // the map ends at the apps panel (src/apps/sidebar.js): the info card's room is from there
+  const mapRight = map.getContainer().getBoundingClientRect().right;
+  const right = !narrow && !$('info').hidden ? Math.max(0, mapRight - $('info').getBoundingClientRect().left) : 0;
   // Furthest zoom-out: the world square fits the space between the cards.
   const c = map.getContainer();
   const free = Math.min(c.clientWidth - left - right, c.clientHeight) - 2 * FIT_MARGIN;
@@ -1761,31 +1806,41 @@ function wireRow(row) {
   const kOf = () => Number(row.dataset.k);
   let items = [];
   let active = 0;
+  // analytics, per visit to the field: typed something, and picked a result
+  let typed = false;
+  let picked = false;
+  const qLen = () => Math.min(input.value.trim().length, 40);
   const draw = () => {
     list.innerHTML = items
       .map((i, j) => `<li data-i="${i}" class="${j === active ? 'active' : ''}"><span class="asn">AS${G.asn[i]}</span>${esc(G.names[i])}</li>`)
       .join('');
   };
   const pick = (i) => {
+    picked = true;
+    if (typed) track('search', { result: 'hit', q_len: qLen(), results: items.length, rank: Math.max(0, items.indexOf(i)) + 1 });
     items = [];
     list.innerHTML = '';
     input.blur();
-    setWaypoint(kOf(), i, { fly: true });
+    setWaypoint(kOf(), i, { fly: true, how: 'search' });
   };
   input.addEventListener('focus', () => {
     const k = kOf();
     if (k < state.waypoints.length) setActive(k);
     input.select();
+    typed = picked = false;
   });
   input.addEventListener('input', () => {
     const k = kOf();
     // clearing a row's text (or its x) drops its waypoint
     if (!input.value && state.waypoints[k] >= 0) return removeWaypoint(k);
+    typed = !!input.value.trim();
     items = search(input.value);
     active = 0;
     draw();
   });
   input.addEventListener('blur', () => {
+    if (typed && !picked) track('search', { result: 'miss', q_len: qLen(), results: items.length });
+    typed = false;
     list.innerHTML = '';
     const k = kOf();
     if (k === 0 && !input.value.trim() && !state.waypoints.length) openRow(0, false);
@@ -1878,6 +1933,7 @@ function useTrace() {
   state.active = state.waypoints.length - 1;
   state.expanded = true;
   state.explore = null;
+  routeSource = 'traceroute';
   waypointsChanged();
   for (const v of state.waypoints) setWaypointInfo(v);
   flyToRoute();
@@ -1967,6 +2023,7 @@ function hashParams() {
     h.set('sel', G.asn[state.explore]); // the node being explored
     if (G.meta.kind === 'routers') h.set('selpop', state.explore);
   }
+  apps.writeHash(h); // app=, side= and the open app's own <id>.<key> (src/apps/appHash.js)
   return h;
 }
 
@@ -1988,6 +2045,7 @@ function clearRoute() {
   traceResult = null;
   pathEdges = [];
   routes = [];
+  routeKey = '';
   syncRows();
   $('infoCards').innerHTML = '';
   layoutCards();
@@ -2001,10 +2059,12 @@ function applyHash() {
   const h = new URLSearchParams(location.hash.slice(1));
   const changed = hashChanges(h, hashParams(), { routers: G?.meta.kind === 'routers' });
   hash = h;
+  apps.applyHash(h); // open or close the app it names, and the app's own params
   const prev = { ...state };
   for (const p of PARAMS) state[p[0]] = readParam(p);
   if (!h.has('layout') && h.has('mode')) state.morph = { cyber: 0, hybrid: 0.5, geo: 1 }[h.get('mode')] ?? 1;
   state.mode = modeOf(state.morph);
+  modeReported = state.mode; // an edited link isn't a mode change of the viewer's
   if (state.basemap !== prev.basemap) {
     setBaseStyle(); // with the raster layer the new state asks for
   } else if (state.mode !== prev.mode || state.renderer !== prev.renderer || state.backboneOnly !== prev.backboneOnly) {
@@ -2026,7 +2086,7 @@ function applyHash() {
     state.dataset = $('dataset').value = data;
     clearRoute();
     applyControls();
-    load(data, h); // which applies the hash's route
+    load(data, h, 'hash'); // which applies the hash's route
     return;
   }
   if (loading) loadRoute = h; // the load in flight applies the latest route, on its map
@@ -2053,9 +2113,10 @@ function applyControls() {
 
 function wireControls() {
   $('morph').addEventListener('input', (e) => setMorph(Number(e.target.value) / 100));
+  $('morph').addEventListener('change', () => reportMode('slider'));
   $('mode').addEventListener('click', (e) => {
     const v = e.target.dataset?.v;
-    if (v) setMorph({ cyber: 0, hybrid: 0.5, geo: 1 }[v]);
+    if (v) setMorph({ cyber: 0, hybrid: 0.5, geo: 1 }[v]), reportMode('button');
   });
   $('view').addEventListener('click', (e) => {
     const v = e.target.dataset?.v;
@@ -2067,19 +2128,27 @@ function wireControls() {
       globeZoom = zoom; // link opacity follows the globe's zoom; keep it in sync
     }
     state.view = v;
+    track('globe_toggle', { to: v });
     render();
   });
-  $('basemap').addEventListener('change', (e) => setBasemap(e.target.value));
+  $('basemap').addEventListener('change', (e) => {
+    setBasemap(e.target.value);
+    track('basemap_change', { basemap: e.target.value });
+  });
   $('renderer').addEventListener('change', (e) => {
     state.renderer = e.target.value;
     updateRaster();
     render();
+    track('renderer_change', { renderer: e.target.value });
   });
-  const slider = (id, key) =>
+  // Sliders report on release ('change'), not on every tick ('input').
+  const slider = (id, key) => {
     $(id).addEventListener('input', (e) => {
       state[key] = Number(e.target.value) / 100;
       render();
     });
+    $(id).addEventListener('change', () => track('style_change', { control: key }));
+  };
   slider('edgeAlpha', 'edgeAlpha');
   slider('nodeSize', 'nodeSize');
   slider('altitude', 'altitude');
@@ -2096,13 +2165,16 @@ function wireControls() {
       state[key] = e.target.checked;
       if (key === 'backboneOnly') updateRaster();
       render();
+      track('style_change', { control: key, on: e.target.checked });
     });
   }
-  for (const id of ['orbits', 'orbitSats', 'orbitStarlink', 'orbitIridium', 'orbitDsn']) {
+  const orbitLayer = { orbits: 'orbits', orbitSats: 'sats', orbitStarlink: 'starlink', orbitIridium: 'iridium', orbitDsn: 'dsn' };
+  for (const id of Object.keys(orbitLayer)) {
     $(id).checked = state[id];
     $(id).addEventListener('change', (e) => {
       state[id] = e.target.checked;
       render();
+      track('orbits_toggle', { layer: orbitLayer[id], on: e.target.checked });
     });
   }
   $('panelMin').addEventListener('click', () => setCard('panelOpen', false));
@@ -2115,9 +2187,10 @@ function wireControls() {
     state.dataset = e.target.value;
     clearRoute();
     writeHash(); // the new dataset, without the old one's route
-    load(state.dataset); // no route: the hash's was for the old map
+    load(state.dataset, null, 'picker'); // no route: the hash's was for the old map
   });
   map.on('moveend', writeHashSoon); // flight keys move every frame
+  map.on('moveend', cameraMoved);
   map.on('zoom', renderSoon);
   // Double-click a node to search it; elsewhere it still zooms.
   map.on('dblclick', (e) => {
@@ -2137,9 +2210,11 @@ function wireControls() {
   window.addEventListener('keydown', (e) => {
     if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
     const stops = { 1: 0, 2: 0.5, 3: 1 };
-    if (stops[e.key] !== undefined) setMorph(stops[e.key]);
+    if (stops[e.key] !== undefined) setMorph(stops[e.key]), reportMode('key');
     else if (e.key === 'g') {
       $('view').querySelector(`[data-v="${state.view === 'globe' ? 'map' : 'globe'}"]`).click();
+    } else if (e.key === ']') {
+      sidebar.toggle();
     } else if (e.key === 'Escape') {
       // first stop exploring, then clear the route
       if (state.explore !== null) explore(null);
@@ -2279,6 +2354,20 @@ function orbitsNotice(text) {
 // Start, stop, restart (the sub-toggles change the guest's query) or pause
 // the layer to match the state. Cheap when nothing changed: render() calls it.
 function syncOrbits() {
+  syncOrbitsLayer();
+  noteOrbits();
+}
+
+// Tell the apps (ctx.orbits) when the layer comes or goes.
+function noteOrbits() {
+  const on = !!appOrbits();
+  if (on !== noteOrbits.on) {
+    noteOrbits.on = on;
+    apps.emit('orbits');
+  }
+}
+
+function syncOrbitsLayer() {
   const want = orbitsWanted();
   const far = want ? 4 : 1;
   if (globe && far !== globeFar) {
@@ -2333,13 +2422,17 @@ function syncOrbits() {
         syncOrbitsControls();
       },
       onFail: (message) => orbitsFailed(message),
-      onLinks: () => refreshOrbitLinks(),
+      onLinks: () => {
+        refreshOrbitLinks();
+        apps.emit('orbits');
+      },
       perf: orbitsPerf,
       // ?orbits_reproject=0: draw the guest's frames for the view they were rendered for (A/B).
       reproject: params.get('orbits_reproject') !== '0',
     });
     updateOrbitLinkTarget();
     syncOrbitsControls();
+    noteOrbits();
   });
 }
 
@@ -2417,6 +2510,160 @@ function refreshOrbitLinks() {
   if (links.length || had) globe.setProps({ layers: [...globeLayers, ...links] });
 }
 
+// --- apps ----------------------------------------------------------------
+// The apps sidebar (src/apps/, README there): the host holds the open app
+// and its ctx, built on this bridge over main.js's state; the sidebar draws
+// it at the right (a bottom drawer when narrow), and the map reflows to its
+// left. Apps' layers are composed into render()'s on the map and the globe.
+
+// Analytics: every app's ctx.track and the sidebar's app_open/app_close land
+// in analytics.js's track (GA4, opt-in; a no-op without a measurement ID).
+
+const apps = createAppHost({
+  registry: createAppsRegistry(),
+  mountPoint: (app) => sidebar.mountPoint(app),
+  bridge: {
+    graph: () => G,
+    dataBase: DATA_BASE,
+    position: (i) => pos(i, [0, 0, 0]),
+    select: (i) => explore(i),
+    flyToNode: (i) => flyTo(i),
+    flyTo: ({ lon, lat, zoom }) => flyToPoint(lon, lat, zoom),
+    fitBounds: (bbox) => fitBbox(bbox),
+    setRoute: (nodes, { fly }) => setRoute(nodes, fly),
+    view: () => appView(),
+    setView: ({ view, mode } = {}) => {
+      if (view === 'map' || view === 'globe') $('view').querySelector(`[data-v="${view}"]`).click();
+      if (mode in MODE_STOPS) setMorph(MODE_STOPS[mode]);
+    },
+    selection: () => ({ explore: state.explore, selected: state.selected }),
+    orbits: () => appOrbits(),
+    clock: () => ({ now: () => (Number.isFinite(ORBITS_T) ? ORBITS_T : Date.now()), live: !Number.isFinite(ORBITS_T) }),
+    redraw: () => renderSoon(),
+    writeHash: () => G && writeHashSoon(), // not before the map: the permalink would lose its data= and route
+    notice: (text) => orbitsNotice(text),
+    track: (name, params) => track(name, params),
+  },
+});
+const MODE_STOPS = { cyber: 0, hybrid: 0.5, geo: 1 };
+
+let focusTimer = 0;
+const sidebar = createSidebar({
+  root: $('apps'),
+  host: apps,
+  onLayout: ({ raised }) => {
+    // narrow: a drawer raised to half the screen or more minimises the
+    // controls and details cards (to their icons), so the map stays in view
+    if (raised && (state.panelOpen || state.detailsOpen)) {
+      state.panelOpen = state.detailsOpen = false;
+      writeHashSoon();
+    }
+    map.resize();
+    layoutCards();
+    clearTimeout(focusTimer);
+    focusTimer = setTimeout(keepFocusVisible, 220); // once the panel's width has landed
+  },
+});
+
+function appView() {
+  const globeView = state.view === 'globe';
+  const c = map.getCenter();
+  const camera = globeView && globeCam
+    ? { lon: globeCam.longitude, lat: globeCam.latitude, zoom: globeCam.zoom + 0.6 }
+    : { lon: c.lng, lat: c.lat, zoom: map.getZoom() };
+  return { view: state.view, mode: state.mode, morph: state.morph, geographic: state.mode === 'geo', camera };
+}
+
+// Each render's apps' layers, { below, above } (src/apps/layers.js).
+function appLayers(globeView) {
+  return apps.layers({ globe: globeView, view: state.view, mode: state.mode, geographic: state.mode === 'geo', zoom: globeView ? globeZoom + 0.6 : map.getZoom() });
+}
+
+// The apps' events, from render(): each only when what it reports changed.
+const emitted = { view: '', selection: '' };
+function emitAppEvents() {
+  const v = `${state.view}|${state.mode}|${state.morph}`;
+  if (v !== emitted.view) (emitted.view = v), apps.emit('view');
+  const s = `${G?.id}|${state.explore}|${state.selected}`;
+  if (s !== emitted.selection) (emitted.selection = s), apps.emit('selection');
+}
+
+let cameraTimer = 0;
+function cameraMoved() {
+  clearTimeout(cameraTimer);
+  cameraTimer = setTimeout(() => apps.emit('camera'), 250);
+}
+
+// The Orbits layer for apps (ctx.orbits): read-only, in lon/lat/alt, or null while it's off.
+function appOrbits() {
+  if (!orbits || orbits.disposed || !orbitsMod || state.view !== 'globe') return null;
+  const R = orbits.earthRadius();
+  const conv = (a) => {
+    const [lon, lat, alt] = orbitsMod.ecefToLngLatAlt(a.ecef, R);
+    return { id: a.id, name: a.name ?? null, kind: a.kind ?? null, lon, lat, altKm: alt / 1000 };
+  };
+  return {
+    anchors: () => orbits.stats.anchors.filter((a) => a.ecef).map(conv),
+    links: () => orbits.links().filter((a) => a.ecef).map(conv),
+    time: () => orbits.stats.anchorsAt || null,
+  };
+}
+
+function flyToPoint(lon, lat, zoom) {
+  if (state.view === 'globe') {
+    globeCam = { longitude: lon, latitude: lat, zoom: zoom !== undefined ? Math.max(0, zoom - 0.6) : Math.max(globeCam?.zoom ?? 0, 2.2), transitionDuration: 1200 };
+    ensureGlobe().setProps({ initialViewState: globeCam });
+    if (Math.abs(globeCam.zoom - globeZoom) > 0.05) (globeZoom = globeCam.zoom), renderSoon();
+  } else {
+    map.flyTo({ center: [lon, lat], zoom: zoom ?? Math.max(map.getZoom(), 5), speed: 1.4 });
+  }
+}
+
+// [west, south, east, north]; west > east crosses the antimeridian.
+function fitBbox([w, s, e, n]) {
+  if (e < w) e += 360;
+  if (state.view === 'globe') {
+    const span = Math.max(e - w, (n - s) * 1.4, 0.5);
+    const lon = (((w + e) / 2 + 540) % 360) - 180;
+    return flyToPoint(lon, (s + n) / 2, Math.max(0.6, Math.min(9, Math.log2(360 / span))));
+  }
+  const pad = map.getPadding();
+  map.fitBounds([[w, s], [e, n]], { padding: { top: 60, bottom: 60, left: pad.left + 40, right: pad.right + 40 }, maxZoom: 9, speed: 1.4 });
+}
+
+function setRoute(nodes, fly) {
+  state.waypoints = nodes.slice();
+  state.active = Math.max(0, nodes.length - 1);
+  state.expanded = true;
+  state.explore = null;
+  waypointsChanged();
+  for (const v of nodes) setWaypointInfo(v);
+  if (fly && nodes.length) flyToRoute();
+}
+
+// The panel or the drawer took room: if the selected node is now under it
+// (or off screen), bring it back into view.
+function keepFocusVisible() {
+  const i = state.explore ?? state.selected;
+  if (!G || i === null) return;
+  const p = pos(i, [0, 0, 0]);
+  const M = 40;
+  if (state.view === 'globe') {
+    const vp = globe?.getViewports()[0];
+    if (!vp || !globeCam) return;
+    const [x, y] = vp.project(p);
+    if (!(x >= M && y >= M && x <= vp.width - M && y <= vp.height - M)) {
+      globeCam = { ...globeCam, longitude: p[0], latitude: p[1], transitionDuration: 500 };
+      globe.setProps({ initialViewState: globeCam });
+    }
+  } else {
+    const c = map.getContainer();
+    const pad = map.getPadding();
+    const { x, y } = map.project([p[0], p[1]]);
+    if (!(x >= pad.left + M && x <= c.clientWidth - pad.right - M && y >= M && y <= c.clientHeight - M)) map.easeTo({ center: [p[0], p[1]], duration: 500 });
+  }
+}
+
 // --- boot ----------------------------------------------------------------
 
 // Loads are superseded, not queued: only the latest one lands, and it applies
@@ -2426,7 +2673,9 @@ let loadGen = 0;
 let loading = false;
 let loadRoute = null; // URLSearchParams, or null for no route
 
-async function load(id, route = null) {
+// `trigger`, for analytics: 'boot', 'picker' (the dataset menu) or 'hash'.
+async function load(id, route = null, trigger = 'boot') {
+  const t0 = performance.now();
   const gen = ++loadGen;
   loading = true;
   loadRoute = route;
@@ -2444,6 +2693,7 @@ async function load(id, route = null) {
   if (gen !== loadGen) return; // a later load replaced this one
   loading = false;
   G = g;
+  track('dataset_load', { dataset_id: id, kind: g.meta.kind, nodes: countBucket(g.meta.counts?.nodes ?? g.n), load_ms: Math.round(performance.now() - t0), trigger });
   tilesMeta = tiles;
   rankCum = null;
   routeLF = null;
@@ -2484,6 +2734,7 @@ async function load(id, route = null) {
 
   if (loadRoute) applySelection(loadRoute);
   loadRoute = null;
+  apps.emit('dataset');
 }
 
 // A permalink's waypoints, as=A,B,… (and pop=… on router maps), and the
@@ -2496,6 +2747,7 @@ function applySelection(h) {
     .filter((v) => v !== undefined);
   if (nodes.length) {
     nodes.forEach((v, k) => (state.waypoints[k] = v));
+    routeSource = 'permalink';
     const at = Number(h.get('at'));
     state.active = Number.isInteger(at) && at >= 1 && at <= nodes.length ? at - 1 : nodes.length - 1;
     state.expanded = h.get('open') !== '0';
@@ -2515,6 +2767,8 @@ async function boot() {
   applyControls();
   wireSearch();
   layoutCards();
+  apps.applyHash(hash); // the app in the permalink opens now, and finds its map when it loads
+  mountConsent(analytics, { link: $('privacyLink') });
   const sets = await listDatasets(DATA_BASE);
   if (!sets.length) {
     $('stats').innerHTML = 'No datasets found. Run <code>python -m netmap build</code> first (see README).';
@@ -2525,6 +2779,8 @@ async function boot() {
     .join('');
   if (!state.dataset || !sets.some((s) => s.id === state.dataset)) state.dataset = sets[0].id;
   $('dataset').value = state.dataset;
+  // what the link carries, not its values
+  if (location.hash.length > 1) track('permalink_open', { has_route: hash.has('as'), has_sel: hash.has('sel'), has_camera: hash.has('lon'), dataset_id: state.dataset });
   map.on('load', () => updateRaster());
   await load(state.dataset, hash);
 }
@@ -2544,6 +2800,7 @@ window.netmap = {
   },
   byAsn: (asn) => G.byAsn.get(asn),
   orbits: () => orbits, // the Orbits layer, while it's on (src/orbits.js)
+  apps: () => apps, // the apps' host (src/apps/host.js): apps().ctx() is the open app's ctx
   // the globe's link arcs: the set on screen, and one coming in (perf probes)
   edgeArcs: () => {
     const { screen, pending } = arcSets;

@@ -1,0 +1,12 @@
+9.170.0.0/24,lsancax1,lax
+9.170.1.0/24,lsancax1,lax
+9.170.2.0/25,lsancax1,lax
+2605:59c8:2700::/40,lsancax1,lax
+98.97.0.0/24,atlagax1,atl
+98.97.1.0/24,atlagax3,atl2
+14.1.64.0/24,jtnaidn2,jkt
+2406:2d40:4000::/38,jtnaidn2,jkt
+129.222.0.0/24,kentwax2,staging2
+129.222.1.0/24,dllstxx1,dfw
+129.222.2.0/24,clgycan1,yyc
+not-a-prefix,bad,bad
