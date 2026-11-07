@@ -24,7 +24,7 @@
 // are.
 
 import { prefixTable } from './ip.js';
-import { BUILTIN } from './api.js';
+import { BUILTIN, measurementUrl } from './api.js';
 import { parseTraceroute, pathRoles } from './traceroute.js';
 
 // The traceroutes worth feeding it: the topology ones (unicast targets)
@@ -120,4 +120,26 @@ export function inferPopLinks(traceroutes, prefixes, { asnOf = () => null, minEv
     }))
     .filter((l) => l.evidence >= minEvidence)
     .sort((x, y) => y.evidence - x.evidence || x.a.localeCompare(y.a) || x.b.localeCompare(y.b));
+}
+
+const RANK = { low: 0, medium: 1, high: 2 };
+
+/**
+ * inferPopLinks' links in the shape the PoPs section's backbone hook takes
+ * (../pops/backbone.js publishBackbone): { source, kind, measured_at, url,
+ * links: [{ from, to, samples }] }, keeping links of `minConfidence` or
+ * better. null if none are left.
+ */
+export function popLinksBackbone(links, { minConfidence = 'medium' } = {}) {
+  const kept = (links ?? []).filter((l) => RANK[l.confidence] >= RANK[minConfidence]);
+  if (!kept.length) return null;
+  const ts = Math.max(...kept.map((l) => l.ts ?? 0));
+  const msms = [...new Set(kept.flatMap((l) => l.msms))].sort((a, b) => a - b);
+  return {
+    source: `inferred from RIPE Atlas traceroutes ${msms.join(', ')}: a Starlink router that dishes behind both PoPs cross`,
+    kind: 'measured',
+    measured_at: ts ? new Date(ts * 1000).toISOString() : null,
+    url: msms.length ? measurementUrl(msms[0]) : null,
+    links: kept.map((l) => ({ from: l.a, to: l.b, samples: l.evidence })),
+  };
 }

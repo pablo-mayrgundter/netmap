@@ -10,7 +10,8 @@ import { addressKind, parseCidr, parseIp, prefixTable, within } from './ip.js';
 import { matchProbe, mergeProbes, nearestRegion, normalizeProbe, popColours } from './probes.js';
 import { latencyBy, parsePing, quantile, reconfigBoundaries, regionKey, resolvesReconfig, rttSeries, stats } from './latency.js';
 import { isStarlinkInfra, parseTraceroute, pathRoles, pathStops, popRtt } from './traceroute.js';
-import { BACKBONE_MSMS, backboneTraceroutes, inferPopLinks } from './backbone.js';
+import { BACKBONE_MSMS, backboneTraceroutes, inferPopLinks, popLinksBackbone } from './backbone.js';
+import { normaliseBackbone } from '../pops/backbone.js';
 import { BUILTIN, chunks, createAtlasClient } from './api.js';
 import { greatCircle } from './arc.js';
 
@@ -173,6 +174,21 @@ test('inferPopLinks: routers dishes behind two PoPs both cross, prefixes of anot
   assert.deepEqual(inferPopLinks(traceroutes.filter((r) => r.msm_id === 5001), prefixes), []);
   // RIPEstat's AS for a hop wins over the fallback space
   assert.deepEqual(inferPopLinks([a, b], prefixes, { asnOf: (ip) => (ip === '206.224.64.2' ? 3356 : null) }), []);
+});
+
+test("popLinksBackbone: inferPopLinks in the PoPs section's backbone shape, weak links left out", () => {
+  const weak = inferPopLinks(traceroutes, prefixes);
+  assert.equal(popLinksBackbone(weak), null); // 'shared' only: low confidence
+  const bb = popLinksBackbone(weak, { minConfidence: 'low' });
+  assert.equal(bb.kind, 'measured');
+  assert.match(bb.source, /inferred from RIPE Atlas traceroutes 6052/);
+  assert.equal(bb.url, 'https://atlas.ripe.net/measurements/6052/');
+  assert.deepEqual(bb.links, [{ from: 'mntlcan1', to: 'nwyynyx1', samples: 2 }]);
+  assert.ok(bb.measured_at.startsWith('2026-11-07'));
+  const place = (code) => ({ code, placed: true });
+  const n = normaliseBackbone(bb, new Map(['mntlcan1', 'nwyynyx1'].map((c) => [c, place(c)])));
+  assert.deepEqual(n.links.map((l) => [l.from, l.to, l.samples]), [['mntlcan1', 'nwyynyx1', 2]]);
+  assert.equal(popLinksBackbone([{ a: 'x', b: 'y', evidence: 3, confidence: 'medium', msms: [5051], ts: 0 }]).links.length, 1);
 });
 
 test('backboneTraceroutes: the latest of each backbone measurement, failures left out', async () => {

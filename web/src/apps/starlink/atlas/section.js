@@ -5,13 +5,15 @@
 // ids and times linked. Uses only ctx (../../README.md).
 //
 // A section: { id, mount(el, ctx), unmount(), onHash(params) }, listed in
-// ../sections.js. Its permalink param is starlink.probe=<id>.
+// ../app.js's SECTIONS. Its permalink param is starlink.probe=<id>.
 
 import { esc, fmt } from '../../util.js';
 import { ATLAS, BUILTIN, PING_INTERVAL_S, atlasClient, measurementUrl, probeUrl } from './api.js';
 import { prefixTable } from './ip.js';
 import { latencyBy, parsePing, reconfigBoundaries, regionKey, resolutionS, resolvesReconfig, rttSeries, stats } from './latency.js';
 import { probeGroup, ROLE_COLOURS, traceGroup } from './mapLayers.js';
+import { BACKBONE_MSMS, backboneTraceroutes, inferPopLinks, popLinksBackbone } from './backbone.js';
+import { publishBackbone } from '../pops/backbone.js';
 import { STARLINK_ASN, matchProbe, normalizeProbe, popColours } from './probes.js';
 import { parseTraceroute, pathRoles, pathStops, popRtt } from './traceroute.js';
 
@@ -72,6 +74,7 @@ export function mount(el, ctx) {
     asn: new Map(), // ip -> asn | null
     listOpen: false,
     stops: null, // memo for the trace layer: { key, stops }
+    links: null, // inferPopLinks: { loading, links, traceroutes, published, error }
   };
   el.classList.add('atlas');
   el.addEventListener('click', onClick);
@@ -238,6 +241,28 @@ async function loadSeries(s, id) {
   render();
 }
 
+// On demand (5 measurements, a couple of MB): PoP -> PoP links inferred from
+// the probes' latest topology and IPv6 root traceroutes. Links of medium
+// confidence or better go to the PoPs section's backbone; all are listed.
+async function inferLinks(s) {
+  if (!s.data || !s.probes || s.links?.loading) return;
+  s.links = { loading: true };
+  render();
+  try {
+    const trs = await backboneTraceroutes(client, s.probes.map((p) => p.id), s.ctx.signal);
+    if (aborted(s)) return;
+    const links = inferPopLinks(trs, s.data.table);
+    const bb = popLinksBackbone(links);
+    if (bb) publishBackbone(bb);
+    s.links = { loading: false, links, traceroutes: trs.length, published: bb?.links.length ?? 0 };
+    s.ctx.track('starlink_atlas_backbone', { links: links.length, published: bb?.links.length ?? 0 });
+  } catch (err) {
+    if (aborted(s)) return;
+    s.links = { loading: false, error: err.message };
+  }
+  render();
+}
+
 // --- selection ---------------------------------------------------------------
 
 function select(id, { fromHash = false, fly = false } = {}) {
@@ -355,10 +380,12 @@ function onClick(e) {
     const p = popPos(s, b.dataset.pop);
     if (p) s.ctx.flyTo({ lon: p.lon, lat: p.lat, zoom: 4 });
   } else if (b.dataset.geo !== undefined) s.ctx.view.set({ mode: 'geo' });
+  else if (b.dataset.infer !== undefined) inferLinks(s);
 }
 
 function onToggle(e) {
   if (S && e.target.classList?.contains('atlas-all')) S.listOpen = e.target.open;
+  if (S && e.target.classList?.contains('atlas-bb')) S.bbOpen = e.target.open;
 }
 
 function render() {
@@ -386,7 +413,30 @@ function html(s) {
     <p class="muted atlas-note">Each probe's dot is where its host says it is, fuzzed by Atlas for privacy: approximate. Its PoP is from its public address and Starlink's pops.csv; the line goes to that PoP.</p>
     ${latencyHTML(s)}
     ${s.selected ? probeHTML(s) : '<p class="muted">Pick a probe on the map or below for its traceroute and its last hour.</p>'}
-    ${listHTML(s)}`;
+    ${listHTML(s)}
+    ${linksHTML(s)}`;
+}
+
+function linksHTML(s) {
+  const l = s.links;
+  const btn = `<button type="button" class="btn" data-infer${l?.loading ? ' disabled' : ''}>${l?.links ? 'Infer again' : 'Infer PoP links'}</button>`;
+  const intro = `<p class="muted atlas-note">From the probes' latest traceroutes (${BACKBONE_MSMS.map((m) => msmLink(m)).join(', ')}; a couple of MB from Atlas): a Starlink router that dishes behind two PoPs both cross ties the two. Inferred, not published by Starlink.</p>`;
+  let body = '';
+  if (l?.loading) body = '<p class="muted">Fetching traceroutes…</p>';
+  else if (l?.error) body = `<p class="app-warn">Atlas didn't answer (${esc(l.error)}).</p>`;
+  else if (l?.links) {
+    body = l.links.length
+      ? `<ul class="atlas-links">${l.links
+          .map(
+            (k) => `<li><b>${esc(k.a)}</b> – <b>${esc(k.b)}</b> <span class="muted">· ${fmt(k.evidence)} traceroutes, ${esc(k.kinds.join(', '))}, ${k.confidence} confidence · ${esc(k.routers.slice(0, 2).join(', '))} · ${k.msms.map((m) => msmLink(m)).join(', ')}</span></li>`,
+          )
+          .join('')}</ul>`
+      : '<p class="muted">No links: each dish\'s traffic stays at its own PoP in these traceroutes.</p>';
+    body += `<p class="muted atlas-note">${fmt(l.traceroutes)} traceroutes. ${
+      l.published ? `${fmt(l.published)} link${l.published > 1 ? 's' : ''} of medium confidence or better sent to the PoPs' backbone layer.` : 'None of medium confidence or better, so the backbone layer is left as it was. "Shared" links are routers at the same hop right past both PoPs\' gateways, with the next hops apart: more likely an address each PoP reuses than a link.'
+    }</p>`;
+  }
+  return `<details class="atlas-bb"${s.bbOpen || l ? ' open' : ''}><summary>Backbone from traceroutes <span class="atlas-badge">inferred</span></summary>${intro}${body}<div class="app-actions">${btn}</div></details>`;
 }
 
 function latencyHTML(s) {
@@ -544,7 +594,8 @@ const STYLE = `<style>
 .atlas .atlas-table th { text-align: left; font-weight: 500; color: var(--muted); position: sticky; top: 0; background: var(--panel); }
 .atlas .atlas-table th, .atlas .atlas-table td { padding: 2px 4px; border-bottom: 1px solid var(--line); }
 .atlas .atlas-table td:nth-child(n+2), .atlas .atlas-table th:nth-child(n+2) { text-align: right; white-space: nowrap; }
-.atlas .atlas-table .app-link { padding: 0; }
+.atlas .atlas-table td:first-child { width: 100%; max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.atlas .atlas-table .app-link { padding: 0; display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .atlas .atlas-sw { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: 1px; }
 .atlas .atlas-probe { border-top: 1px solid var(--line); margin-top: 10px; }
 .atlas .atlas-probe dl { font-size: 12px; }
@@ -564,6 +615,8 @@ const STYLE = `<style>
 .atlas .atlas-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11px; color: var(--muted); margin: 4px 0; }
 .atlas .atlas-all ul { max-height: 260px; overflow: auto; }
 .atlas .app-link.on { color: var(--accent); }
+.atlas .atlas-links { margin: 4px 0; padding-left: 16px; font-size: 12px; }
+.atlas .atlas-bb .atlas-badge { color: #ffd27a; border-color: rgba(255,180,40,.45); }
 </style>`;
 
 export default { id: 'atlas', mount, unmount, onHash };
