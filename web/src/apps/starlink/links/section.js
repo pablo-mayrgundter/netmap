@@ -22,7 +22,7 @@ import { GRID } from './grid.js';
 import { atParam, fmtAge, fmtDeg, fmtKm, fmtLatLon, fmtMs, parseAt } from './format.js';
 import { RAMP_CSS } from './mapLayers.js';
 import { coverageAngle, EARTH_MEAN_KM, gcKm } from './geometry.js';
-import { MODEL } from './model.js';
+import { MODEL, modelTime } from './model.js';
 import { LASER_CUTOFF } from './orbit.js';
 
 const MY_LAYERS = ['gateways', 'links', 'mesh', 'traffic'];
@@ -62,7 +62,7 @@ const fresh = () => ({
   timings: null,
   result: null, // the last tick
   at: null, // { lat, lon }
-  sat: null, // a NORAD id
+  sat: null, // a satellite catalog number (SATCAT, CelesTrak's NORAD_CAT_ID)
   mask: MODEL.userMask,
   layers: new Set(MY_LAYERS),
   picking: false,
@@ -161,7 +161,7 @@ function onError(err) {
 // camera (the far side is hidden anyway); on the 2D map, all of them.
 function meshView() {
   const v = ctx.view.get();
-  if (!v || v.view !== 'globe') return { flat: true, radius: 180 };
+  if (!v || v.view !== 'globe') return { flat: true, radius: 180, ref: st.at?.lon ?? v?.camera?.lon ?? 0 };
   const c = v.camera;
   return { lon: c.lon, lat: c.lat, radius: Math.max(32, Math.min(100, 130 / 2 ** Math.max(0, c.zoom - 1.2))) };
 }
@@ -172,7 +172,7 @@ function tick() {
   if (!st?.ready) return;
   const links = st.layers.has('links'), mesh = st.layers.has('mesh'), traffic = st.layers.has('traffic');
   if (!links && !mesh && !traffic && st.result) return; // nothing drawn needs it
-  const t = ctx.clock.now();
+  const t = modelTime({ orbitsActive: ctx.orbits.active(), orbitsTime: ctx.orbits.time(), now: ctx.clock.now() });
   st.lastTickT = t;
   const dest = st.dest ? st.pops.findIndex((p) => p.code === st.dest) : -1;
   st.engine.tick({
@@ -296,7 +296,7 @@ function liveHTML() {
   if (!st.layers.has('links')) return `<p class="muted">Turn on <i>Links</i> to model a dish's links.</p>${extra}`;
   const when = `<p class="muted sl-small sl-when">At ${esc(new Date(r.t).toISOString().slice(11, 19))} UTC${ctx.clock.live ? '' : ' (clock stopped)'} · scheduling slot ${slotLabel(r.t)}</p>`;
   const sel = r.sat && (!r.dish?.serving || r.dish.serving.norad !== r.sat.norad) ? satHTML(r.sat, 'Selected satellite') : '';
-  const miss = st.missingSat === st.sat && st.sat !== null && !r.sat ? `<p class="app-warn">NORAD ${esc(st.sat)} isn't in these elements.</p>` : '';
+  const miss = st.missingSat === st.sat && st.sat !== null && !r.sat ? `<p class="app-warn">Catalog no. ${esc(st.sat)} isn't in these elements.</p>` : '';
   if (!r.dish) return `${when}<p class="muted">Place a dish to model its links: the satellites it sees, the one serving it, the gateways that one sees (or the laser path to one), and the PoP behind the gateway.</p>${sel}${miss}${extra}`;
   return `${when}${dishHTML(r.dish)}${sel}${miss}${extra}`;
 }
@@ -392,7 +392,10 @@ function trafficHTML() {
     </div>`;
 }
 
-const satButton = (s) => `<button type="button" class="app-link" data-sat="${s.norad}" title="Select this satellite (it serves the dish while it's in view)">${esc(s.name || `NORAD ${s.norad}`)}</button> <span class="muted">NORAD ${s.norad}</span>`;
+// The catalog number is the US Space Force's satellite catalog (SATCAT) number,
+// first assigned by NORAD; CelesTrak's elements carry it as NORAD_CAT_ID.
+const SATCAT_TITLE = "Satellite catalog number: the US Space Force's SATCAT number, historically assigned by NORAD, which CelesTrak's elements are keyed by";
+const satButton = (s) => `<button type="button" class="app-link" data-sat="${s.norad}" title="Select this satellite (it serves the dish while it's in view)">${esc(s.name || `Satellite ${s.norad}`)}</button> <span class="muted" title="${esc(SATCAT_TITLE)}">catalog no. ${s.norad}</span>`;
 
 function gwLink(g) {
   const row = st.gwRows[g.g];

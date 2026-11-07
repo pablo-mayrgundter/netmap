@@ -34,7 +34,7 @@ export function checkAnchors(model, { t, anchors }) {
 /** The typed arrays in a tick's result, to transfer rather than copy. */
 export function transferables(r) {
   const out = [];
-  if (r?.mesh) out.push(r.mesh.seg.buffer, r.mesh.col.buffer);
+  if (r?.mesh) out.push(r.mesh.seg.buffer, r.mesh.col.buffer, r.mesh.pts.buffer, r.mesh.pcol.buffer);
   if (r?.traffic) out.push(r.traffic.links.seg.buffer, r.traffic.links.load.buffer, r.traffic.feeders.seg.buffer, r.traffic.feeders.load.buffer);
   return out;
 }

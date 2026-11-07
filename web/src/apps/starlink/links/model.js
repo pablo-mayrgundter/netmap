@@ -29,6 +29,13 @@ export const SHELL_COLOURS = [
 ];
 export const shellColour = (incl) => (SHELL_COLOURS.find((c) => incl < c.maxIncl) ?? SHELL_COLOURS[SHELL_COLOURS.length - 1]).rgb;
 
+/**
+ * The time the model runs at: the Orbits layer's frame time while it's on
+ * (so the modelled satellites, mesh and links sit on the satellites it draws,
+ * from the same elements), else netmap's clock.
+ */
+export const modelTime = ({ orbitsActive, orbitsTime, now }) => (orbitsActive && Number.isFinite(orbitsTime) && orbitsTime > 0 ? orbitsTime : now);
+
 /** The 15 s scheduling slot a time is in (an integer). */
 export const slotOf = (ms, o = MODEL) => Math.floor((ms - o.slotOffsetMs) / o.slotMs);
 
@@ -298,16 +305,23 @@ export class LinkModel {
   }
 
   /**
-   * The mesh's line segments for drawing, from this tick's positions:
-   * { seg: Float32Array (lon, lat, alt m at each end), col: Uint8Array
-   * (RGBA at each end), n }. Links that are down are left out; with `view` ({ lon, lat,
-   * radius }, degrees) so are links whose middle is farther than `radius`
-   * from it (the globe's far side, or off screen when zoomed in). Each
-   * link's second end is unwrapped to within 180° of its first. `view.flat`
-   * (the 2D map): altitudes 0.
+   * The mesh for drawing, from this tick's positions: its line segments
+   * { seg: Float32Array (lon, lat, alt m at each end), col: Uint8Array (RGBA
+   * at each end), n }, and a point for every satellite at an end of one,
+   * { pts: Float32Array (lon, lat, alt m), pcol: Uint8Array (RGBA), np },
+   * written from the very same numbers, so every segment starts and ends on
+   * a drawn satellite. Links that are down are left out; with `view` ({ lon,
+   * lat, radius }, degrees) so are links whose middle is farther than
+   * `radius` from it (the globe's far side, or off screen when zoomed in).
+   * `view.flat` (the 2D map): altitudes 0, and longitudes unwrapped to within
+   * 180° of `view.ref` (the dish's, or the camera's), each link's second end
+   * to within 180° of its first, so lines take the short way and meet the
+   * section's other points in the same copy of the world.
    */
   meshLines(view = null) {
-    if (view && !(view.radius < 180)) view = view.flat ? { flat: true, lon: 0, lat: 0, radius: 180 } : null;
+    const flat = !!view?.flat;
+    const ref = flat && Number.isFinite(view.ref) ? view.ref : null;
+    if (view && !(view.radius < 180)) view = null; // nothing to cull
     const g = this.grid, geo = this.geo;
     const seg = new Float32Array(6 * g.n), col = new Uint8Array(8 * g.n);
     const cosR = view ? Math.cos((view.radius * Math.PI) / 180) : -2;
@@ -315,6 +329,22 @@ export class LinkModel {
     const vy = view ? Math.cos((view.lat * Math.PI) / 180) * Math.sin((view.lon * Math.PI) / 180) : 0;
     const vz = view ? Math.sin((view.lat * Math.PI) / 180) : 0;
     const pal = this.shells.map((sh) => shellColour(sh.incl));
+    const near = (lon, to) => lon + 360 * Math.round((to - lon) / 360);
+    // One point per (satellite, copy of the world) at an end of a drawn link.
+    const pts = new Float32Array(3 * 2 * g.n), pcol = new Uint8Array(4 * 2 * g.n);
+    const seen = new Map();
+    let np = 0;
+    const point = (i, lon, lat, alt) => {
+      const key = i * 16 + 8 + Math.round((lon - geo[3 * i]) / 360);
+      if (seen.has(key)) return;
+      seen.set(key, np);
+      pts[3 * np] = lon;
+      pts[3 * np + 1] = lat;
+      pts[3 * np + 2] = alt;
+      const c = pal[this.shellOf[i]];
+      pcol.set([c[0], c[1], c[2], 230], 4 * np);
+      np++;
+    };
     let k = 0;
     for (let e = 0; e < g.n; e++) {
       if (!this.up[e]) continue;
@@ -323,19 +353,23 @@ export class LinkModel {
         const mx = this.pos[3 * i] + this.pos[3 * j], my = this.pos[3 * i + 1] + this.pos[3 * j + 1], mz = this.pos[3 * i + 2] + this.pos[3 * j + 2];
         if ((mx * vx + my * vy + mz * vz) / Math.sqrt(mx * mx + my * my + mz * mz) < cosR) continue;
       }
-      const lon0 = geo[3 * i];
-      let lon1 = geo[3 * j];
-      if (lon1 - lon0 > 180) lon1 -= 360;
-      else if (lon1 - lon0 < -180) lon1 += 360;
-      const flat = view?.flat ? 0 : 1;
-      seg.set([lon0, geo[3 * i + 1], flat * geo[3 * i + 2], lon1, geo[3 * j + 1], flat * geo[3 * j + 2]], 6 * k);
+      const lon0 = ref === null ? geo[3 * i] : near(geo[3 * i], ref);
+      const lon1 = near(geo[3 * j], lon0);
+      const q = 6 * k;
+      seg[q] = lon0;
+      seg[q + 1] = geo[3 * i + 1];
+      seg[q + 2] = flat ? 0 : geo[3 * i + 2];
+      seg[q + 3] = lon1;
+      seg[q + 4] = geo[3 * j + 1];
+      seg[q + 5] = flat ? 0 : geo[3 * j + 2];
+      point(i, seg[q], seg[q + 1], seg[q + 2]);
+      point(j, seg[q + 3], seg[q + 4], seg[q + 5]);
       const c = pal[this.shellOf[i]];
-      const cross = g.kind[e] === 1;
-      const a = cross ? 52 : 92;
+      const a = g.kind[e] === 1 ? 84 : 132;
       col.set([c[0], c[1], c[2], a, c[0], c[1], c[2], a], 8 * k); // per vertex
       k++;
     }
-    return { seg, col, n: k };
+    return { seg, col, n: k, pts, pcol, np, t: this.t };
   }
 
   /**
@@ -416,7 +450,7 @@ export class LinkModel {
    * The modelled links for a dish at lon/lat at time `ms`: { t, slot, user,
    * visible, serving, gateways (in the serving satellite's view), exit,
    * latency } (see the section for the fields). `opts`: userMask, gwMask,
-   * pin (a NORAD id to serve from if it's in view).
+   * pin (a catalog number to serve from if it's in view).
    */
   dish(lon, lat, opts = {}) {
     const o = { ...MODEL, ...opts };
@@ -435,7 +469,7 @@ export class LinkModel {
       else pick = pickServing(visible, { laserCost: this.tree ? this.laserCost : null });
     }
     if (pick && pick.rule !== 'pinned') this.held = { norad: this.sats[pick.i].norad, slot, rule: pick.rule, lon, lat };
-    const out = { t: this.t, slot, user: { lon, lat }, mask: o.userMask, gwMask: o.gwMask, visible: visible.slice(0, 60).map((v) => ({ ...v, norad: this.sats[v.i].norad, lon: this.geo[3 * v.i], lat: this.geo[3 * v.i + 1], alt: this.geo[3 * v.i + 2] })), nVisible: visible.length, nTerminal: visible.filter((v) => v.terminal).length, serving: null, gateways: [], exit: null, latency: null };
+    const out = { t: this.t, slot, user: { lon, lat }, mask: o.userMask, gwMask: o.gwMask, visible: visible.slice(0, 60).map((v) => ({ ...v, norad: this.sats[v.i].norad, name: this.sats[v.i].name, shell: this.shells[this.shellOf[v.i]]?.label ?? null, lon: this.geo[3 * v.i], lat: this.geo[3 * v.i + 1], alt: this.geo[3 * v.i + 2] })), nVisible: visible.length, nTerminal: visible.filter((v) => v.terminal).length, serving: null, gateways: [], exit: null, latency: null };
     if (!pick) return out;
     const v = visible.find((x) => x.i === pick.i);
     out.serving = { ...this.satInfo(pick.i), el: v.el, range: v.range, az: azimuth(s, this.pos, 3 * pick.i), rule: pick.rule, held: !!pick.held, footprint: coverageAngle(this.geo[3 * pick.i + 2] / 1000, o.gwMask) };

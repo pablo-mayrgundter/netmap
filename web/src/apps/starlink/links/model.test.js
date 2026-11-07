@@ -173,3 +173,55 @@ test("checkAnchors: the model's satellites against the Orbits layer's anchors", 
   assert.ok(off.maxKm > 5 && off.maxKm < 13, `${off.maxKm}`);
   assert.equal(checkAnchors(m, { t, anchors: [] }), null);
 });
+
+test('mesh lines start and end on drawn satellites, from the same tick', async () => {
+  const { modelTime } = await import('./model.js');
+  const m = new LinkModel({ omm: OMM, gateways: GATEWAYS, pops: POPS });
+  const t = T0 + 4321;
+  m.propagate(t);
+  m.gatewayViews();
+  m.mesh();
+  const views = [null, { lon: -100, lat: 40, radius: 60 }, { flat: true, radius: 180, ref: 175 }, { flat: true, radius: 180, ref: -98.5 }];
+  for (const v of views) {
+    const ml = m.meshLines(v);
+    assert.equal(ml.t, t);
+    assert.ok(ml.n > 0 && ml.np > 0);
+    const at = new Set();
+    for (let p = 0; p < ml.np; p++) at.add(`${ml.pts[3 * p]},${ml.pts[3 * p + 1]},${ml.pts[3 * p + 2]}`);
+    assert.equal(at.size, ml.np); // no point twice
+    for (let k = 0; k < ml.n; k++) {
+      for (const q of [6 * k, 6 * k + 3]) {
+        // Every end is exactly a drawn point…
+        assert.ok(at.has(`${ml.seg[q]},${ml.seg[q + 1]},${ml.seg[q + 2]}`), `segment ${k} end ${q} has no point`);
+      }
+    }
+    // …and every point is a satellite's propagated position at this tick (longitude modulo 360).
+    const wrap = (x) => Math.abs(x - 360 * Math.round(x / 360));
+    for (let p = 0; p < ml.np; p++) {
+      const i = m.opList.find((j) => m.geo[3 * j + 1] === ml.pts[3 * p + 1] && wrap(ml.pts[3 * p] - m.geo[3 * j]) < 1e-4);
+      assert.ok(i !== undefined, `point ${p} is no satellite`);
+      assert.equal(ml.pts[3 * p + 2], v?.flat ? 0 : m.geo[3 * i + 2]);
+    }
+    if (v?.flat) for (let p = 0; p < ml.np; p++) assert.ok(Math.abs(ml.pts[3 * p] - v.ref) <= 180 + 60, `${ml.pts[3 * p]}`); // a link's second end may sit up to a link past ±180
+  }
+  // The points move with the next tick: the buffers are per tick, not shared.
+  const a = m.meshLines(null);
+  m.propagate(t + 1000);
+  m.mesh();
+  const b = m.meshLines(null);
+  assert.notEqual(a.pts, b.pts);
+  assert.notEqual(a.pts[1], b.pts[1]);
+  // The model runs at the Orbits layer's frame time while it's on (same elements, same instant).
+  assert.equal(modelTime({ orbitsActive: true, orbitsTime: 123, now: 456 }), 123);
+  assert.equal(modelTime({ orbitsActive: true, orbitsTime: null, now: 456 }), 456);
+  assert.equal(modelTime({ orbitsActive: false, orbitsTime: 123, now: 456 }), 456);
+});
+
+test('in-view satellites carry their names (for the tooltip), not just catalog numbers', () => {
+  const m = new LinkModel({ omm: OMM, gateways: GATEWAYS, pops: POPS });
+  m.propagate(T0);
+  m.gatewayViews();
+  const d = m.dish(-98.5, 38.5);
+  for (const v of d.visible) assert.equal(v.name, `STARLINK-${v.norad}`);
+  assert.ok(d.visible.every((v) => v.shell));
+});

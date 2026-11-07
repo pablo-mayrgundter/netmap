@@ -309,7 +309,7 @@ export function createLinkLayers(view) {
 
   // The laser mesh: the worker's line buffers, drawn as they come, as
   // two-point paths (binary: per-vertex positions and colours).
-  let meshKey = null, meshData = null, starts = new Uint32Array(0);
+  let meshKey = null, meshData = null, pointData = null, starts = new Uint32Array(0);
   function mesh(env) {
     const m = view.mesh();
     if (!m || !view.layers().has('mesh')) return [];
@@ -321,8 +321,11 @@ export function createLinkLayers(view) {
         startIndices: starts.subarray(0, m.n),
         attributes: { getPath: { value: m.seg, size: 3 }, getColor: { value: m.col, size: 4, normalized: true } },
       };
+      // A point on every satellite at an end of a drawn link, from the same numbers as the lines.
+      pointData = { length: m.np, attributes: { getPosition: { value: m.pts, size: 3 }, getFillColor: { value: m.pcol, size: 4, normalized: true } } };
     }
-    const dim = view.layers().has('traffic') ? 0.45 : 1;
+    // Dimmer zoomed out (the whole mesh is dense), and under the traffic.
+    const dim = (view.layers().has('traffic') ? 0.45 : 1) * (env.zoom >= 4 ? 1 : env.zoom >= 3 ? 0.8 : 0.6);
     return [
       new PathLayer({
         id: 'mesh',
@@ -333,6 +336,20 @@ export function createLinkLayers(view) {
         billboard: true,
         opacity: dim,
         parameters: params(env),
+      }),
+      new ScatterplotLayer({
+        id: 'mesh-sats',
+        data: pointData,
+        getRadius: env.zoom >= 4 ? 3 : 1.7,
+        radiusUnits: 'pixels',
+        billboard: true,
+        stroked: env.zoom >= 4,
+        getLineColor: [8, 12, 20, 220],
+        lineWidthUnits: 'pixels',
+        getLineWidth: 1,
+        opacity: dim,
+        parameters: params(env),
+        updateTriggers: { getRadius: env.zoom >= 4 },
       }),
     ];
   }
@@ -416,7 +433,7 @@ export function createLinkLayers(view) {
       if (end(info, 'legs')) return `${LEG[o.kind] ?? o.kind} (modelled) · ${o.hops ? `${o.hops} hops, ` : ''}${fmtKm(o.km)} · ${fmtMs(o.ms)} one way${o.gw ? ` · ${o.kind === 'backhaul' ? `${o.gw.name} → PoP ${o.gw.popCode} (${o.gw.popCity})` : o.gw.name}` : ''}`;
       if (end(info, 'sats') || end(info, 'in-view-sats')) {
         const what = o.kind === 'serving' ? 'serving satellite (modelled)' : o.kind === 'selected' ? 'selected satellite' : o.kind === 'hop' ? 'on the laser path' : o.kind === 'down-sat' ? 'the laser path goes down here' : `in view${o.terminal ? ', sees a gateway' : ''}`;
-        return `${o.name ?? `NORAD ${o.norad}`} · NORAD ${o.norad} · ${what}${Number.isFinite(o.el) ? ` · ${o.el.toFixed(0)}° up, ${fmtKm(o.range)}` : ''}${o.shell ? ` · ${o.shell}` : ''}`;
+        return `${o.name || 'Satellite'} · catalog no. ${o.norad} (US Space Force SATCAT) · ${what}${Number.isFinite(o.el) ? ` · ${o.el.toFixed(0)}° up, ${fmtKm(o.range)}` : ''}${o.shell ? ` · ${o.shell}` : ''}`;
       }
       if (end(info, 'dish')) return `The dish (modelled user terminal) · ${o.lat.toFixed(2)}, ${o.lon.toFixed(2)}`;
       return null;
