@@ -157,7 +157,15 @@ a panel at the right on desktop (collapsible and resizable, the map reflows
 to its left) and a bottom drawer on phones (peek, half, full). The rail lists
 the apps. The first is **Starlink** (AS14593): its summary from the loaded
 graph (cone, k-core, upstreams and peers), fly-to, and what's public about
-its routing. More panels are coming (#28). How to write an app, and the `ctx`
+its routing. Its **PoPs** section draws Starlink's PoPs (sized by IPv4
+addresses) and customer regions (coloured by the PoP serving them, with a line
+to it) from [Starlink data](#starlink-data), lists the regions farthest from
+their PoP, and shows AS14593's IXes and facilities, fetched live from
+PeeringDB's API and kept for the session. Click a PoP for its prefixes, IATA
+code and top regions (`starlink.pop=<code>`; `starlink.layer=` picks the map
+layers). The PoP-to-PoP backbone isn't published yet: the section says so,
+and draws one when a source supplies it (`web/src/apps/starlink/pops/backbone.js`).
+More panels are coming (#28). How to write an app, and the `ctx`
 interface apps build on, are in [`web/src/apps/README.md`](web/src/apps/README.md).
 
 ## Orbits: satellites and space networks on the globe

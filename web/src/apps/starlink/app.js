@@ -1,36 +1,43 @@
 // The Starlink app (AS14593): its summary from the loaded graph, with fly-to,
-// and what's public about Starlink's routing. A stub for now: the panels for
-// its PoPs, live BGP, RIPE Atlas probes and modelled satellite links come
-// next (epic #28). Uses only ctx (README in this folder).
+// its sections (SECTIONS, below the summary), and what's public about
+// Starlink's routing. Uses only ctx (README in this folder).
 
 import { esc, fmt } from '../util.js';
 import { STARLINK_ASN, starlinkSummary } from './summary.js';
-import { SECTIONS } from './sections.js';
+import * as pops from './pops/section.js';
+import * as atlas from './atlas/section.js';
+
+// The sections, in panel order. Each is a module with mount(el, ctx),
+// unmount() and, optionally, onHash(params); it gets its own element and
+// shares the app's ctx (so its hash keys are starlink.<key>, its layer
+// groups the app's: pick names that don't collide).
+const SECTIONS = [pops, atlas];
 
 let ctx = null;
-let root = null;
+let root = null; // the summary's element
+let aboutEl = null;
 let info = null; // AS14593's details record, once fetched
 let infoFor = null; // the dataset it's for
 let aboutOpen = true;
-let mounted = []; // the sections mounted (sections.js), each with its element
 
 function render() {
   if (!root) return;
   const ds = ctx.dataset();
+  aboutEl.innerHTML = aboutHTML();
+  wireAbout();
   if (!ds) {
-    root.innerHTML = `<p class="muted">Loading the map…</p>${aboutHTML()}`;
-    return wireAbout();
+    root.innerHTML = '<p class="muted">Loading the map…</p>';
+    return;
   }
   const node = ctx.node(STARLINK_ASN);
   if (node && infoFor !== ds.id) fetchInfo(ds.id);
   const s = starlinkSummary(node, infoFor === ds.id ? info : null, node ? ctx.neighbours(STARLINK_ASN) : []);
-  root.innerHTML = (s.present ? summaryHTML(s, ds) : absentHTML(ds)) + aboutHTML();
+  root.innerHTML = s.present ? summaryHTML(s, ds) : absentHTML(ds);
   root.querySelector('[data-fly]')?.addEventListener('click', () => {
     ctx.select(STARLINK_ASN);
     ctx.track('starlink_fly');
   });
   for (const b of root.querySelectorAll('[data-asn]')) b.addEventListener('click', () => ctx.select(Number(b.dataset.asn)));
-  wireAbout();
 }
 
 async function fetchInfo(id) {
@@ -86,13 +93,12 @@ function aboutHTML() {
       <p><b>Modelled.</b> Routing in space is below the IP layer and isn't public: the laser links between
         satellites are modelled from SpaceX's FCC filings, and gateway sites come from FCC earth-station
         filings. Anything modelled will say so.</p>
-      <p class="muted">Coming next here: Starlink's PoPs on the map, a live BGP looking glass, RIPE Atlas
-        probes, and modelled satellite links.</p>
+      <p class="muted">Coming next here: a live BGP looking glass and modelled satellite links.</p>
     </details>`;
 }
 
 function wireAbout() {
-  const d = root.querySelector('.app-about');
+  const d = aboutEl.querySelector('.app-about');
   d?.addEventListener('toggle', () => {
     if (d.open === aboutOpen) return;
     aboutOpen = d.open;
@@ -102,39 +108,37 @@ function wireAbout() {
 
 export function mount(el, c) {
   ctx = c;
-  root = el.appendChild(document.createElement('div'));
+  const part = () => el.appendChild(document.createElement('div'));
+  root = part();
+  const sectionEls = SECTIONS.map(part);
+  aboutEl = part();
   info = infoFor = null;
   aboutOpen = ctx.hash.get('about') !== '0';
   ctx.on('dataset', render);
   render();
-  mounted = SECTIONS.map((s) => {
-    const sel = el.appendChild(document.createElement('section'));
-    sel.dataset.section = s.id;
+  SECTIONS.forEach((s, k) => {
     try {
-      s.mount(sel, ctx);
+      s.mount(sectionEls[k], ctx);
     } catch (err) {
-      sel.innerHTML = `<p class="app-warn">${esc(s.id)} didn't load (${esc(err.message)}).</p>`;
+      sectionEls[k].innerHTML = `<p class="app-warn">This part of the app failed: ${esc(err.message)}</p>`;
     }
-    return { s, el: sel };
   });
 }
 
 export function unmount() {
-  for (const { s, el } of mounted) {
+  for (const s of SECTIONS) {
     try {
       s.unmount();
-    } catch {
-      /* the next section still unmounts */
+    } catch (err) {
+      console.warn('[starlink] a section unmount:', err);
     }
-    el.remove();
   }
-  mounted = [];
-  if (root) root.remove();
-  ctx = root = info = infoFor = null;
+  if (root) root.parentElement.innerHTML = '';
+  ctx = root = aboutEl = info = infoFor = null;
 }
 
 export function onHash(params) {
-  for (const { s } of mounted) s.onHash?.(params);
+  for (const s of SECTIONS) s.onHash?.(params);
   const open = params.about !== '0';
   if (open === aboutOpen) return;
   aboutOpen = open;

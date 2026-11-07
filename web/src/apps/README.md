@@ -20,7 +20,8 @@ or collapses its panel.
 | `graph.js` | the loaded graph by ASN |
 | `sidebar.js` | the DOM: the rail, the panel, the drawer (no tests: needs a browser) |
 | `util.js` | `esc` and `fmt` for apps' HTML |
-| `starlink/` | the Starlink app |
+| `starlink/` | the Starlink app; `app.js` lists its sections (`SECTIONS`) |
+| `starlink/pops/` | its PoPs section: PoPs, regions, PeeringDB and the backbone hook (#31) |
 
 Everything but `sidebar.js` is DOM-free, and `npm test` covers it
 (`*.test.js` here and in each app's folder; `fixtures.js` has a tiny graph
