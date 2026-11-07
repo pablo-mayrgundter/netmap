@@ -16,7 +16,7 @@ permissions:
 concurrency: preview-${{ github.ref }}
 
 env:
-  BIZDASH_REF: v0.1.0 # as in pages.yml
+  BIZDASH_REF: v0.1.1 # as in pages.yml
 
 jobs:
   preview:
