@@ -5,7 +5,7 @@ on:
   pull_request:
 
 env:
-  BIZDASH_REF: 5a6509aa42e3e6ee95118db223c0ccd954a37f48 # v0.1.0-rc.1, as in pages.yml
+  BIZDASH_REF: v0.1.0 # as in pages.yml
 
 jobs:
   pipeline:

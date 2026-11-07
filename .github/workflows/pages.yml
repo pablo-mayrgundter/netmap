@@ -24,7 +24,7 @@ permissions:
 env:
   # netmap's dashboard (dash/) is built on this bizdash release; the same ref
   # is in preview.yml and ci.yml (dash/README.md, "Bumping bizdash").
-  BIZDASH_REF: 5a6509aa42e3e6ee95118db223c0ccd954a37f48 # v0.1.0-rc.1
+  BIZDASH_REF: v0.1.0
 
 concurrency:
   group: pages

@@ -114,12 +114,11 @@ property allows 50 event-scoped custom dimensions and 50 custom metrics.
 ## Bumping bizdash
 
 bizdash is pinned by one ref, `BIZDASH_REF`, in netmap's `pages.yml`,
-`preview.yml` and `ci.yml`. It's
-on v0.1.0-rc.1 by its commit SHA, `5a6509aa42e3e6ee95118db223c0ccd954a37f48`,
-because the tag isn't published yet. When `v0.1.0` is out, repin:
+`preview.yml` and `ci.yml`, now `v0.1.0`. To move to a newer release
+(or a release candidate's commit SHA), change it in all three:
 
 ```sh
-sed -i 's/BIZDASH_REF: 5a6509aa42e3e6ee95118db223c0ccd954a37f48 # v0.1.0-rc.1/BIZDASH_REF: v0.1.0/' .github/workflows/*.yml
+sed -i 's/BIZDASH_REF: v0.1.0/BIZDASH_REF: v0.2.0/' .github/workflows/*.yml
 ```
 
 Read bizdash's CHANGELOG for config or plugin API changes, run the tests
@@ -131,7 +130,7 @@ From the repository root:
 
 ```sh
 python -m venv .venv && . .venv/bin/activate
-pip install "git+https://github.com/pablo-mayrgundter/bizdash@5a6509aa42e3e6ee95118db223c0ccd954a37f48"
+pip install "git+https://github.com/pablo-mayrgundter/bizdash@v0.1.0"
 python -m bizdash serve --demo --site dash/site          # http://127.0.0.1:5077, synthetic data
 ```
 
