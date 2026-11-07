@@ -189,9 +189,12 @@ export function boundsAround(center, points, { pad = 2 } = {}) {
   return [wrap(w), s, wrap(e), n];
 }
 
-// The map layers the app can show, and which are on by default.
-export const LAYERS = ['pops', 'regions', 'peering', 'backbone'];
-export const DEFAULT_LAYERS = ['pops', 'regions', 'peering', 'backbone'];
+// The map layers the app can show, and which are on by default. One
+// `starlink.layer` param holds every section's: this one's (POPS_LAYERS) and
+// the links section's (links/: the mesh and traffic are off by default).
+export const POPS_LAYERS = ['pops', 'regions', 'peering', 'backbone'];
+export const LAYERS = [...POPS_LAYERS, 'gateways', 'links', 'mesh', 'traffic'];
+export const DEFAULT_LAYERS = [...POPS_LAYERS, 'gateways', 'links'];
 
 /** The `starlink.layer` param -> a Set of known layer names (null: the default). */
 export function parseLayers(param) {

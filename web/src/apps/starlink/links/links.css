@@ -1,0 +1,47 @@
+/* The Starlink app's links section (links/section.js). Scoped under .sl-links. */
+.sl-links .sl-badge { display: inline-block; margin-left: 6px; padding: 0 6px; border: 1px dashed rgba(255, 186, 80, 0.8); border-radius: 9px; color: #ffcf8a; font-size: 10px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; vertical-align: 1px; }
+.sl-links .sl-small { font-size: 11px; }
+.sl-links .sl-layers { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 8px 0; font-size: 12px; }
+.sl-links .sl-layers label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap; }
+.sl-links .sl-place { flex-wrap: wrap; gap: 6px; }
+.sl-links .sl-place select, .sl-links .sl-mask select { background: var(--panel, #11151d); color: inherit; border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font: inherit; font-size: 12px; }
+.sl-links .sl-live { margin: 8px 0; padding: 6px 10px 8px; border: 1px dashed rgba(255, 186, 80, 0.35); border-radius: 6px; background: rgba(255, 186, 80, 0.035); }
+.sl-links .sl-live:empty { display: none; }
+.sl-links .sl-when { margin: 2px 0 4px; }
+.sl-links .sl-dl { margin: 4px 0; }
+.sl-links .sl-dl dd { overflow-wrap: anywhere; }
+.sl-links .sl-budget { width: 100%; border-collapse: collapse; margin: 6px 0 2px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.sl-links .sl-budget th, .sl-links .sl-budget td { padding: 2px 4px; text-align: right; border-bottom: 1px solid var(--line); }
+.sl-links .sl-budget th[scope="row"], .sl-links .sl-budget thead th:first-child { text-align: left; font-weight: 400; }
+.sl-links .sl-budget thead th { color: var(--muted); font-weight: 500; font-size: 11px; }
+.sl-links .sl-budget .sl-total th, .sl-links .sl-budget .sl-total td { font-weight: 600; border-bottom: 0; }
+.sl-links .sl-budget .sl-badge { margin-left: 4px; }
+.sl-links .sl-key { display: inline-block; width: 14px; height: 0; margin-right: 6px; vertical-align: middle; border-top: 2px dashed; }
+.sl-links .sl-key.up { color: rgb(90, 220, 255); }
+.sl-links .sl-key.down { color: rgb(255, 186, 80); }
+.sl-links .sl-key.fibre { color: rgb(255, 236, 190); }
+.sl-links .sl-key.laser { color: rgb(255, 120, 200); }
+.sl-links .sl-mask { display: flex; align-items: center; gap: 6px; margin: 6px 0; font-size: 12px; }
+.sl-links .sl-sat { margin: 6px 0; padding: 4px 8px; border-left: 3px solid rgb(255, 186, 80); background: rgba(255, 255, 255, 0.03); border-radius: 4px; }
+.sl-links .sl-sat h4 { margin: 2px 0; font-size: 12px; font-weight: 500; }
+.sl-links .sl-gws { margin: 4px 0; padding-left: 0; list-style: none; font-size: 12px; line-height: 1.5; }
+.sl-links .sl-gws a, .sl-links a { color: var(--accent); }
+.sl-links details { margin: 6px 0; }
+.sl-links summary { cursor: pointer; font-size: 12px; }
+.sl-links .sl-gws-inview ol { margin: 4px 0; padding-left: 18px; font-size: 12px; }
+.sl-links .app-warn-inline { color: #ffcf8a; }
+.sl-links .sl-how p { font-size: 12px; }
+.sl-links .sl-badge.est { border-style: solid; border-color: rgba(250, 136, 50, 0.9); color: #ffb27a; }
+.sl-links .sl-block { margin: 8px 0 4px; padding-top: 6px; border-top: 1px solid var(--line); }
+.sl-links .sl-block h4 { margin: 0 0 4px; font-size: 12px; font-weight: 600; }
+.sl-links .sl-legend { display: flex; flex-wrap: wrap; gap: 2px 10px; margin: 4px 0; font-size: 11px; color: var(--muted); }
+.sl-links .sl-legend i { display: inline-block; width: 14px; height: 2px; margin-right: 5px; vertical-align: middle; }
+.sl-links .sl-ramp { display: flex; align-items: center; gap: 6px; margin: 4px 0; font-size: 11px; color: var(--muted); }
+.sl-links .sl-ramp i { flex: 1; height: 6px; border-radius: 3px; }
+.sl-links .sl-gwload { list-style: none; margin: 4px 0; padding: 0; }
+.sl-links .sl-gwload li { position: relative; display: flex; gap: 8px; align-items: baseline; padding: 1px 4px; font-size: 12px; }
+.sl-links .sl-gwload .sl-bar { position: absolute; left: 0; top: 1px; bottom: 1px; width: var(--w); background: rgb(250, 136, 50); opacity: 0.2; border-radius: 3px; }
+.sl-links .sl-rname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; position: relative; }
+.sl-links .sl-num { font-variant-numeric: tabular-nums; white-space: nowrap; position: relative; }
+.sl-links .sl-fibre { margin-top: 4px; }
+.sl-links .sl-fibre p { margin: 4px 0; }

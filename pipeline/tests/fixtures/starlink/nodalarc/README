@@ -1,0 +1,5 @@
+Nine site files from NodalArc's catalog (https://github.com/dotchance/nodalarc,
+catalog/nodalarc/sites/earth/, commit 8bf6b45), Apache License 2.0; see NOTICE.
+For the `starlink-gateways` tests: a filing site, a filing site placed at its town,
+a later filing (SES-MOD) of an early site, two reported sites, a site with no source,
+a city-centre guess, and two sites that aren't Starlink gateways.

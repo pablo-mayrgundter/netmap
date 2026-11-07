@@ -1,0 +1,63 @@
+{
+ "messages": [
+  [
+   "info",
+   "Results exclude routes with very low visibility (less than 10 RIS full-feed peers seeing)."
+  ]
+ ],
+ "version": "1.2",
+ "data_call_name": "prefix-count",
+ "status": "ok",
+ "status_code": 200,
+ "time": "2026-11-07T00:52:08.532734",
+ "data": {
+  "ipv4": [
+   {
+    "prefixes": 2194,
+    "timestamp": "2026-09-28T00:00:00",
+    "address-space": 3989
+   },
+   {
+    "prefixes": 2254,
+    "timestamp": "2026-10-10T00:00:00",
+    "address-space": 4086
+   },
+   {
+    "prefixes": 2269,
+    "timestamp": "2026-10-22T00:00:00",
+    "address-space": 4100
+   },
+   {
+    "prefixes": 2213,
+    "timestamp": "2026-11-03T00:00:00",
+    "address-space": 4046
+   }
+  ],
+  "ipv6": [
+   {
+    "prefixes": 1100,
+    "timestamp": "2026-09-28T00:00:00",
+    "address-space": 4
+   },
+   {
+    "prefixes": 1112,
+    "timestamp": "2026-10-10T00:00:00",
+    "address-space": 4
+   },
+   {
+    "prefixes": 1125,
+    "timestamp": "2026-10-22T00:00:00",
+    "address-space": 4
+   },
+   {
+    "prefixes": 1088,
+    "timestamp": "2026-11-03T00:00:00",
+    "address-space": 3
+   }
+  ],
+  "resource": "14593",
+  "query_starttime": "2025-11-01T00:00:00",
+  "query_endtime": "2026-11-06T16:00:00",
+  "resolution": "12d"
+ }
+}

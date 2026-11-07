@@ -1,0 +1,70 @@
+{
+ "messages": [
+  [
+   "info",
+   "Query time has been set to latest time data is available for (2026-11-06 16:00 UTC)"
+  ]
+ ],
+ "version": "4.1",
+ "data_call_name": "visibility",
+ "status": "ok",
+ "status_code": 200,
+ "time": "2026-11-07T00:51:39.607471",
+ "data": {
+  "visibilities": [
+   {
+    "probe": {
+     "city": "Amsterdam",
+     "country": "NL",
+     "longitude": 4.8833,
+     "latitude": 52.3667,
+     "name": "RRC00",
+     "ipv4_peer_count": 62,
+     "ipv6_peer_count": 46,
+     "ixp": "RIPE-NCC Multihop"
+    },
+    "ipv4_full_table_peers_not_seeing": [],
+    "ipv6_full_table_peers_not_seeing": [],
+    "ipv4_full_table_peer_count": 39,
+    "ipv6_full_table_peer_count": 31
+   },
+   {
+    "probe": {
+     "city": "London",
+     "country": "GB",
+     "longitude": -0.0192,
+     "latitude": 51.4969,
+     "name": "RRC01",
+     "ipv4_peer_count": 75,
+     "ipv6_peer_count": 59,
+     "ixp": "LINX / LONAP"
+    },
+    "ipv4_full_table_peers_not_seeing": [],
+    "ipv6_full_table_peers_not_seeing": [],
+    "ipv4_full_table_peer_count": 28,
+    "ipv6_full_table_peer_count": 28
+   },
+   {
+    "probe": {
+     "city": "Amsterdam",
+     "country": "NL",
+     "longitude": 4.9508,
+     "latitude": 52.3563,
+     "name": "RRC03",
+     "ipv4_peer_count": 83,
+     "ipv6_peer_count": 62,
+     "ixp": "AMS-IX / NL-IX"
+    },
+    "ipv4_full_table_peers_not_seeing": [],
+    "ipv6_full_table_peers_not_seeing": [],
+    "ipv4_full_table_peer_count": 26,
+    "ipv6_full_table_peer_count": 29
+   }
+  ],
+  "resource": "14593",
+  "related_prefixes": [],
+  "query_time": "2026-11-06T16:00:00",
+  "latest_time": "2026-11-06T16:00:00",
+  "include": []
+ }
+}

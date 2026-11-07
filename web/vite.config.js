@@ -13,5 +13,15 @@ export default defineConfig({
       input: { main: resolve(import.meta.dirname, 'index.html'), map: resolve(import.meta.dirname, 'map.html') },
     },
   },
+  // satellite.js's WASM builds (never used: the link model runs its JS
+  // SGP4) would add megabytes and top-level await to the worker's bundle.
+  resolve: {
+    alias: {
+      '#wasm-single-thread': resolve(import.meta.dirname, 'src/apps/starlink/links/noWasm.js'),
+      '#wasm-multi-thread': resolve(import.meta.dirname, 'src/apps/starlink/links/noWasm.js'),
+    },
+  },
+  // ...and the dev server's pre-bundling would pull them in without the alias.
+  optimizeDeps: { exclude: ['satellite.js'] },
   server: { host: true },
 });
