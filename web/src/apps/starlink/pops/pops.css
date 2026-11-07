@@ -1,0 +1,24 @@
+/* The Starlink app's PoPs section (section.js). Scoped under .sl-pops. */
+.sl-pops .sl-swatch { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: 0; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5); }
+.sl-pops .sl-small { font-size: 11px; }
+.sl-pops .sl-layers { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 8px 0; font-size: 12px; }
+.sl-pops .sl-layers label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap; }
+.sl-pops .sl-detail { margin: 10px 0; padding: 8px 10px; border: 1px solid var(--line); border-left: 3px solid var(--pop); border-radius: 6px; background: rgba(255, 255, 255, 0.03); }
+.sl-pops .sl-detail-head { display: flex; align-items: center; gap: 8px; }
+.sl-pops .sl-detail-head h2 { flex: 1; margin: 2px 0; }
+.sl-pops .sl-detail-head .btn { padding: 2px 8px; }
+.sl-pops .sl-detail h3 { margin-top: 10px; }
+.sl-pops ol { list-style: none; margin: 0; padding: 0; }
+.sl-pops .sl-regions li, .sl-pops .sl-ixes li { position: relative; display: flex; gap: 8px; align-items: baseline; padding: 2px 4px; font-size: 12px; }
+.sl-pops .sl-regions .sl-bar { position: absolute; left: 0; top: 1px; bottom: 1px; width: var(--w); background: var(--pop); opacity: 0.18; border-radius: 3px; }
+.sl-pops .sl-rname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; position: relative; }
+.sl-pops .sl-num { font-variant-numeric: tabular-nums; white-space: nowrap; position: relative; }
+.sl-pops .sl-regions .sl-num.muted { min-width: 64px; text-align: right; }
+.sl-pops .sl-far .app-link { font-size: 12px; }
+.sl-pops .sl-far .sl-num { float: right; padding-left: 6px; color: var(--muted); }
+.sl-pops .sl-hit { background: rgba(236, 120, 255, 0.16); border-radius: 4px; }
+.sl-pops .sl-facs { margin: 4px 0; padding-left: 16px; font-size: 12px; }
+.sl-pops details { margin: 6px 0; }
+.sl-pops summary { cursor: pointer; font-size: 12px; }
+.sl-pops a { color: var(--accent); }
+.sl-pops .app-warn .btn { margin-left: 4px; padding: 1px 8px; }
