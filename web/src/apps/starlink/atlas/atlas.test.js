@@ -10,7 +10,7 @@ import { addressKind, parseCidr, parseIp, prefixTable, within } from './ip.js';
 import { matchProbe, mergeProbes, nearestRegion, normalizeProbe, popColours } from './probes.js';
 import { latencyBy, parsePing, quantile, reconfigBoundaries, regionKey, resolvesReconfig, rttSeries, stats } from './latency.js';
 import { isStarlinkInfra, parseTraceroute, pathRoles, pathStops, popRtt } from './traceroute.js';
-import { inferPopLinks } from './backbone.js';
+import { BACKBONE_MSMS, backboneTraceroutes, inferPopLinks } from './backbone.js';
 import { BUILTIN, chunks, createAtlasClient } from './api.js';
 import { greatCircle } from './arc.js';
 
@@ -173,6 +173,14 @@ test('inferPopLinks: routers dishes behind two PoPs both cross, prefixes of anot
   assert.deepEqual(inferPopLinks(traceroutes.filter((r) => r.msm_id === 5001), prefixes), []);
   // RIPEstat's AS for a hop wins over the fallback space
   assert.deepEqual(inferPopLinks([a, b], prefixes, { asnOf: (ip) => (ip === '206.224.64.2' ? 3356 : null) }), []);
+});
+
+test('backboneTraceroutes: the latest of each backbone measurement, failures left out', async () => {
+  assert.deepEqual(BACKBONE_MSMS, [5051, 5151, 6052, 6152, 6001]);
+  const client = { latest: async (m, ids) => (m === 5151 ? Promise.reject(new Error('503')) : traceroutes.filter((r) => r.msm_id === m && ids.includes(r.prb_id))) };
+  const got = await backboneTraceroutes(client, [61631, 65777, 1012236], null);
+  assert.deepEqual(got.map((r) => `${r.msm_id}:${r.prb_id}`), ['6052:61631', '6052:65777', '6001:1012236']);
+  assert.equal(inferPopLinks(got, prefixes).length, 1);
 });
 
 test('api: batches of probe ids, the session cache, backoff on 429, abort', async () => {

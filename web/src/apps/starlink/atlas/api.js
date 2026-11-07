@@ -131,3 +131,7 @@ export function createAtlasClient({ fetch = globalThis.fetch, wait = sleep, cach
     },
   };
 }
+
+let shared = null;
+/** The page's one client, so every part of the app shares its cache (per session). */
+export const atlasClient = () => (shared ??= createAtlasClient());

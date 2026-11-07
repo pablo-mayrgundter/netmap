@@ -8,7 +8,7 @@
 // ../sections.js. Its permalink param is starlink.probe=<id>.
 
 import { esc, fmt } from '../../util.js';
-import { ATLAS, BUILTIN, PING_INTERVAL_S, createAtlasClient, measurementUrl, probeUrl } from './api.js';
+import { ATLAS, BUILTIN, PING_INTERVAL_S, atlasClient, measurementUrl, probeUrl } from './api.js';
 import { prefixTable } from './ip.js';
 import { latencyBy, parsePing, reconfigBoundaries, regionKey, resolutionS, resolvesReconfig, rttSeries, stats } from './latency.js';
 import { probeGroup, ROLE_COLOURS, traceGroup } from './mapLayers.js';
@@ -16,7 +16,7 @@ import { STARLINK_ASN, matchProbe, normalizeProbe, popColours } from './probes.j
 import { parseTraceroute, pathRoles, pathStops, popRtt } from './traceroute.js';
 
 // One client for the page: its cache outlives the app's mounts (per session).
-const client = createAtlasClient();
+const client = atlasClient();
 const files = new Map(); // the pipeline's Starlink files, by URL
 
 const PROBES_GROUP = 'atlas-probes';

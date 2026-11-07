@@ -24,7 +24,21 @@
 // are.
 
 import { prefixTable } from './ip.js';
+import { BUILTIN } from './api.js';
 import { parseTraceroute, pathRoles } from './traceroute.js';
+
+// The traceroutes worth feeding it: the topology ones (unicast targets)
+// and the IPv6 root ones, where the shared routers show up.
+export const BACKBONE_MSMS = [BUILTIN.topology[4].id, 5151, BUILTIN.topology[6].id, 6152, BUILTIN.traceroute[6].id];
+
+/**
+ * Their latest results for these probes, with atlasClient(): feed them to
+ * inferPopLinks. A measurement that fails is left out.
+ */
+export async function backboneTraceroutes(client, probeIds, signal) {
+  const got = await Promise.allSettled(BACKBONE_MSMS.map((m) => client.latest(m, probeIds, signal)));
+  return got.flatMap((g) => (g.status === 'fulfilled' ? g.value : []));
+}
 
 /**
  * inferPopLinks(traceroutes, prefixes, { asnOf, minEvidence }) ->
