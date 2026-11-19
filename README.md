@@ -66,6 +66,34 @@ follows the light of the links it replaces. Member links are hidden. The
 650 km), and hovering a fiber shows its transit/peering counts. It works in
 cyber mode too, where it bundles links between nearby clusters.
 
+**Cables: fibers as lanes.** The *cables* toggle (`cables=1`, on by default,
+geo half only) draws well-known submarine and overland cables
+(`web/src/cables/data.js`): about 50 submarine systems (MAREA, Dunant,
+Grace Hopper, 2Africa, SEA-ME-WE 5 and 6, AAE-1, PEACE, FASTER, JUPITER,
+Southern Cross, …) through their public landing points, with approximate
+waypoints at sea, and the long-haul overland corridors between the big
+metros (named for the corridor, not a carrier). Cables that run between the
+same two stations share a span. With fiber bundles on, each fiber is pinned
+into the cables: its ends snap to the nearest stations (within 900 km), it
+takes the shortest route by length (overland spans cost 1.25× so long hauls
+ride the sea), and a route more than 2.2× the great circle (+600 km) isn't
+taken. Routed fibers are drawn as a multiplex, like the channels of a CWDM
+link or the lines of a subway map: a coloured lane in every span they ride,
+side by side in a dark casing, a white stop at each station (as wide as the
+trunk where lines branch or leave), and a fan from the station out to the
+fiber's own ends. A span shows the biggest fibers first, and a fiber is
+drawn only where every span on its route has a lane free, so each line runs
+unbroken end to end; the rest ride in one grey lane. How many lanes a span
+shows grows with zoom, `4·2^(z/2)`: about 8 at world scale, dozens close up,
+and narrowing the *Bundle* slider makes more, smaller fibers. Lanes are
+ordered across a span by which side their fibers come from and leave to, so
+lines cross as little as they can at the stops. Fibers no route carries stay
+plain lines. Hover a lane for its links, ends, length by cable and the
+cables it rides; a span for its cables and what it carries; a stop for its
+cables. The graph, routing and lane layout are in `web/src/cables/net.js`
+(`npm test`), the deck.gl layers in `web/src/cables/layers.js`. The routes
+are illustrative: which cable carries which AS link isn't public.
+
 Keys: `1` cyber · `2` hybrid · `3` geo (jumps on the layout slider) · `g` globe · `/` search · `]` the
 apps panel · `Esc` stop exploring, then clear the route. Camera (hold): `↑`/`↓` pitch, `←`/`→` rotate,
 `A`/`D` strafe, `W`/`S` zoom; on the globe the arrows orbit. The compass resets
