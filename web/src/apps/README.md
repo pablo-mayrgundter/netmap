@@ -21,7 +21,7 @@ or collapses its panel.
 | `sidebar.js` | the DOM: the rail, the panel, the drawer (no tests: needs a browser) |
 | `util.js` | `esc` and `fmt` for apps' HTML |
 | `starlink/` | the Starlink app; `app.js` lists its sections (`SECTIONS`) |
-| `atc/` | the air traffic control app: the FAA's 22 en route centers and incidents on their network, stepped through a timeline (first: the 13 Nov 2026 ground stop). `data.js` holds the centers and incidents, and says what's modelled |
+| `incidents/` | the Incidents app: incidents made of events that may share a cause, each stepped through a timeline on the map. First: the 2026 ATC outages (Minneapolis Center, Philadelphia TRACON, the nationwide ground stop) with the FAA's 22 en route centers. `data.js` holds them, and says what's modelled |
 | `starlink/pops/` | its PoPs section: PoPs, regions, PeeringDB and the backbone hook (#31) |
 | `starlink/links/` | its gateways and modelled links section: SGP4 in a worker, the link model, the laser mesh, routes and the traffic estimate (#34, #35) |
 
