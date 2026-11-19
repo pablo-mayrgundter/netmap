@@ -4,7 +4,8 @@
 
 import { createRegistry } from './registry.js';
 import starlink from './starlink/index.js';
+import atc from './atc/index.js';
 
-export const APPS = [starlink];
+export const APPS = [starlink, atc];
 
 export const createAppsRegistry = () => createRegistry(APPS);
