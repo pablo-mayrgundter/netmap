@@ -44,15 +44,34 @@ export function strafeGlobe({ longitude, latitude, bearing = 0 }, deg) {
 const MAX_LATITUDE = 85.051129;
 const zoomAdjust = (lat) => Math.log2(Math.PI * Math.cos((Math.max(-MAX_LATITUDE, Math.min(MAX_LATITUDE, lat)) * Math.PI) / 180));
 
+// deck's globe: the Earth's radius at zoom 0 (common units = px at scale 1),
+// and the camera's distance from the point it looks at, in viewport heights.
+const GLOBE_RADIUS = 256;
+const GLOBE_ALTITUDE = 1.5;
+
+/** An orbit drag's turn per pixel far from the Earth, radians (celestiary's). */
+export const ORBIT_RAD_PER_PX = 0.005;
+const MIN_ROTATE_SCALE = 1e-6;
+
+/**
+ * celestiary's proximity scale for an orbit drag (its DESIGN.md, "Proximity-
+ * scaled orbit drag"): 1 - exp(-alt / R), floored at 1e-6 and capped at 1.
+ * Near the ground it is alt / R, so a drag sweeps a similar share of the
+ * visible patch at any height; from a few radii out it is 1.
+ */
+export const rotateScale = (alt, R) => Math.min(1, Math.max(MIN_ROTATE_SCALE, 1 - Math.exp(-alt / R)));
+
 /**
  * The globe's camera after an orbit drag of (dx, dy) px from `start`, like
  * OrbitControls about the Earth's centre: across turns the Earth about its
  * axis (y, the poles), up/down about the screen's x axis (latitude, at north
- * up). The ground follows the pointer; the rate falls with zoom, so a drag
- * moves about as far across the screen at any zoom.
+ * up). The ground follows the pointer, at ORBIT_RAD_PER_PX scaled by the
+ * camera's height over the ground (rotateScale).
  */
-export function orbitGlobe({ longitude, latitude, zoom }, dx, dy, height) {
-  const k = ORBIT_DEG_PER_HEIGHT / Math.max(1, height) / Math.pow(2, Math.max(0, zoom));
+export function orbitGlobe({ longitude, latitude, zoom, altitude = GLOBE_ALTITUDE }, dx, dy, height) {
+  const R = GLOBE_RADIUS * Math.pow(2, zoom - zoomAdjust(latitude)); // px
+  const alt = altitude * height; // px, to the ground at the centre
+  const k = ((ORBIT_RAD_PER_PX * rotateScale(alt, R)) * 180) / Math.PI; // degrees a pixel
   const lat = Math.max(-89, Math.min(89, latitude + dy * k));
   const lon = longitude - dx * k;
   return {
@@ -72,8 +91,8 @@ export class OrbitGlobeController extends GlobeController {
     // deck pans on the "alternate" drag (right button or a function key)
     // when dragMode is 'rotate', and on the plain one when it's 'pan'.
     this.dragMode = event.srcEvent?.pointerType === 'mouse' ? 'rotate' : 'pan';
-    const { longitude, latitude, zoom } = this.controllerState.getViewportProps();
-    this._orbitStart = { longitude, latitude, zoom };
+    const { longitude, latitude, zoom, altitude } = this.controllerState.getViewportProps();
+    this._orbitStart = { longitude, latitude, zoom, altitude };
     return super._onPanStart(event);
   }
 

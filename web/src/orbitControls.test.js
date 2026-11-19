@@ -21,11 +21,20 @@ test('isPanDrag: right button or a modifier', () => {
   assert.equal(isPanDrag({ button: 0, shiftKey: true }), true);
 });
 
-test('orbitGlobe: across turns about the axis, up/down changes latitude, the ground follows', async () => {
-  const { orbitGlobe } = await import('./orbitControls.js');
-  const a = orbitGlobe({ longitude: 0, latitude: 0, zoom: 0 }, 100, 0, 1000);
-  assert.ok(Math.abs(a.longitude + 18) < 1e-9 && a.latitude === 0 && Math.abs(a.zoom) < 1e-9);
-  const b = orbitGlobe({ longitude: 0, latitude: 0, zoom: 1 }, 0, 100, 1000);
-  assert.ok(Math.abs(b.latitude - 9) < 1e-9 && b.longitude === 0 && b.zoom < 1);
-  assert.equal(orbitGlobe({ longitude: 0, latitude: 80, zoom: 0 }, 0, 1000, 1000).latitude, 89);
+test('rotateScale: alt/R near the ground, 1 far out, never 0', async () => {
+  const { rotateScale } = await import('./orbitControls.js');
+  assert.ok(Math.abs(rotateScale(1, 1000) - 0.001) < 1e-6);
+  assert.ok(rotateScale(5, 1) > 0.99 && rotateScale(50, 1) === 1);
+  assert.equal(rotateScale(0, 1), 1e-6);
+});
+
+test('orbitGlobe: across turns about the axis, up/down changes latitude, slower up close', async () => {
+  const { orbitGlobe, ORBIT_RAD_PER_PX } = await import('./orbitControls.js');
+  const far = orbitGlobe({ longitude: 0, latitude: 0, zoom: 0 }, 100, 0, 1000); // alt/R ~ 18: full rate
+  assert.ok(Math.abs(far.longitude + (100 * ORBIT_RAD_PER_PX * 180) / Math.PI) < 1e-6 && far.latitude === 0);
+  const b = orbitGlobe({ longitude: 0, latitude: 0, zoom: 0 }, 0, 10, 1000);
+  assert.ok(b.latitude > 0 && b.longitude === 0 && b.zoom < 0);
+  const near = orbitGlobe({ longitude: 0, latitude: 0, zoom: 12 }, 100, 0, 1000);
+  assert.ok(Math.abs(near.longitude) < Math.abs(far.longitude) / 100);
+  assert.equal(orbitGlobe({ longitude: 0, latitude: 80, zoom: 0 }, 0, 10000, 1000).latitude, 89);
 });
