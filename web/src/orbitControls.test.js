@@ -36,5 +36,8 @@ test('orbitGlobe: across turns about the axis, up/down changes latitude, slower 
   assert.ok(b.latitude > 0 && b.longitude === 0 && b.zoom < 0);
   const near = orbitGlobe({ longitude: 0, latitude: 0, zoom: 12 }, 100, 0, 1000);
   assert.ok(Math.abs(near.longitude) < Math.abs(far.longitude) / 100);
+  // capped: up close a pixel turns the Earth 1 / R, the ground keeps pace with the pointer
+  const R = 256 * Math.pow(2, 12) / Math.PI;
+  assert.ok(Math.abs(near.longitude + (100 / R) * 180 / Math.PI) < 1e-9);
   assert.equal(orbitGlobe({ longitude: 0, latitude: 80, zoom: 0 }, 0, 10000, 1000).latitude, 89);
 });

@@ -66,12 +66,16 @@ export const rotateScale = (alt, R) => Math.min(1, Math.max(MIN_ROTATE_SCALE, 1 
  * OrbitControls about the Earth's centre: across turns the Earth about its
  * axis (y, the poles), up/down about the screen's x axis (latitude, at north
  * up). The ground follows the pointer, at ORBIT_RAD_PER_PX scaled by the
- * camera's height over the ground (rotateScale).
+ * camera's height over the ground (rotateScale), and never faster than it.
  */
 export function orbitGlobe({ longitude, latitude, zoom, altitude = GLOBE_ALTITUDE }, dx, dy, height) {
   const R = GLOBE_RADIUS * Math.pow(2, zoom - zoomAdjust(latitude)); // px
   const alt = altitude * height; // px, to the ground at the centre
-  const k = ((ORBIT_RAD_PER_PX * rotateScale(alt, R)) * 180) / Math.PI; // degrees a pixel
+  // Capped at 1 / R: the ground under the centre never outruns the pointer.
+  // (deck's camera is 1.5 viewport heights up, so near the ground the scaled
+  // rate alone, ~0.005 alt, would carry the ground ~5x the drag.)
+  const rad = Math.min(ORBIT_RAD_PER_PX * rotateScale(alt, R), 1 / R);
+  const k = (rad * 180) / Math.PI; // degrees a pixel
   const lat = Math.max(-89, Math.min(89, latitude + dy * k));
   const lon = longitude - dx * k;
   return {
