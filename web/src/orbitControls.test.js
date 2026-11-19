@@ -20,3 +20,12 @@ test('isPanDrag: right button or a modifier', () => {
   assert.equal(isPanDrag({ button: 2 }), true);
   assert.equal(isPanDrag({ button: 0, shiftKey: true }), true);
 });
+
+test('orbitGlobe: across turns about the axis, up/down changes latitude, the ground follows', async () => {
+  const { orbitGlobe } = await import('./orbitControls.js');
+  const a = orbitGlobe({ longitude: 0, latitude: 0, zoom: 0 }, 100, 0, 1000);
+  assert.ok(Math.abs(a.longitude + 18) < 1e-9 && a.latitude === 0 && Math.abs(a.zoom) < 1e-9);
+  const b = orbitGlobe({ longitude: 0, latitude: 0, zoom: 1 }, 0, 100, 1000);
+  assert.ok(Math.abs(b.latitude - 9) < 1e-9 && b.longitude === 0 && b.zoom < 1);
+  assert.equal(orbitGlobe({ longitude: 0, latitude: 80, zoom: 0 }, 0, 1000, 1000).latitude, 89);
+});

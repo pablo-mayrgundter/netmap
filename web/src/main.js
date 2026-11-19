@@ -150,7 +150,7 @@ const map = new maplibregl.Map({
   zoom: Number(hash.get('z') ?? 1.6),
   pitch: Number(hash.get('pitch') ?? 0),
   bearing: Number(hash.get('bearing') ?? 0),
-  maxPitch: 85,
+  maxPitch: 90, // the arrows sweep from straight down to the horizon
   renderWorldCopies: false,
   attributionControl: { compact: true },
   maxZoom: 16,
@@ -179,7 +179,7 @@ let globeDevice = null; // deck's luma device, for the Orbits layer
 // depth range costs the globe's own layers some precision.
 const globeView = () => new GlobeView({ resolution: 5, farZMultiplier: orbitsWanted() ? 4 : 1 });
 let globeFar = 1;
-const GLOBE_MAX_PITCH = 60; // deck's default for the globe: past it the horizon fills the view
+const GLOBE_MAX_PITCH = 90; // the arrows sweep from straight down to the horizon
 // The globe's camera from the hash's or the map's numbers (zoom in globe units).
 const globeCamOf = (lon, lat, zoom, pitch = 0, bearing = 0) => ({ longitude: lon, latitude: lat, zoom, pitch: Math.min(GLOBE_MAX_PITCH, pitch), bearing, maxPitch: GLOBE_MAX_PITCH });
 let globeDrawn = false; // the globe has drawn a frame with the map's data
@@ -2296,7 +2296,7 @@ function wireFlightKeys() {
     } else {
       if (strafe) map.panBy([strafe * RATE.strafe * map.getContainer().clientWidth * dt, 0], { duration: 0 });
       map.jumpTo({
-        pitch: Math.max(0, Math.min(85, map.getPitch() + tilt * RATE.pitch * dt)),
+        pitch: Math.max(0, Math.min(90, map.getPitch() + tilt * RATE.pitch * dt)),
         bearing: map.getBearing() + turn * RATE.bearing * dt,
         zoom: map.getZoom() + zoom * RATE.zoom * dt,
       });

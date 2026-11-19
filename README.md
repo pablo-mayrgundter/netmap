@@ -69,8 +69,9 @@ cyber mode too, where it bundles links between nearby clusters.
 Keys: `1` cyber · `2` hybrid · `3` geo (jumps on the layout slider) · `g` globe · `/` search · `]` the
 apps panel · `Esc` stop exploring, then clear the route. Camera, the same on the map
 and the globe (like three.js's OrbitControls, about the point at the centre): left drag orbits (across
-turns, up/down tilts), right drag (or `Shift`/`Ctrl` + drag) pans, the wheel zooms; one finger pans on
-touch. Keys (hold): `↑`/`↓` pitch, `←`/`→` roll (bearing), `W`/`S` zoom, `A`/`D` strafe. The compass
+rotates about y, up/down about x: on the globe the Earth turns about its axis and tilts north-south; on
+the map the view turns and tilts), right drag (or `Shift`/`Ctrl` + drag) pans, the wheel zooms; one finger pans on
+touch. Keys (hold): `↑`/`↓` pitch (straight down to the horizon), `←`/`→` roll (bearing), `W`/`S` zoom, `A`/`D` strafe. The compass
 resets rotation and pitch.
 The URL hash is a full permalink: every control (layout, view, basemap,
 renderer, sliders, toggles), the dataset, the camera (2D map or globe), the

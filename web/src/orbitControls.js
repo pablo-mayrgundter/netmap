@@ -1,6 +1,9 @@
 // Mouse and keys the way three.js's OrbitControls has them, for both views.
-// The camera orbits the point at the centre of the screen:
-//   left drag            orbit: across turns (bearing), up/down tilts (pitch)
+//   left drag            orbit: across rotates about y, up/down about x.
+//                        On the globe that turns the Earth about its axis and
+//                        tilts it north-south (the camera orbits its centre);
+//                        on the map, the ground's vertical (bearing) and the
+//                        screen's horizontal (pitch) about the screen centre.
 //   right (or shift/ctrl/cmd + left) drag   pan: the ground follows the pointer
 //   wheel                zoom (toward the pointer)
 // One finger on a touch screen pans, as before. Rotation is linear in the
@@ -37,32 +40,53 @@ export function strafeGlobe({ longitude, latitude, bearing = 0 }, deg) {
   return { longitude: ((((lon + 180) % 360) + 360) % 360) - 180, latitude: lat };
 }
 
+// deck's globe zoom is scaled by latitude; its own pan compensates the same way.
+const MAX_LATITUDE = 85.051129;
+const zoomAdjust = (lat) => Math.log2(Math.PI * Math.cos((Math.max(-MAX_LATITUDE, Math.min(MAX_LATITUDE, lat)) * Math.PI) / 180));
+
+/**
+ * The globe's camera after an orbit drag of (dx, dy) px from `start`, like
+ * OrbitControls about the Earth's centre: across turns the Earth about its
+ * axis (y, the poles), up/down about the screen's x axis (latitude, at north
+ * up). The ground follows the pointer; the rate falls with zoom, so a drag
+ * moves about as far across the screen at any zoom.
+ */
+export function orbitGlobe({ longitude, latitude, zoom }, dx, dy, height) {
+  const k = ORBIT_DEG_PER_HEIGHT / Math.max(1, height) / Math.pow(2, Math.max(0, zoom));
+  const lat = Math.max(-89, Math.min(89, latitude + dy * k));
+  const lon = longitude - dx * k;
+  return {
+    longitude: ((((lon + 180) % 360) + 360) % 360) - 180,
+    latitude: lat,
+    zoom: zoom + zoomAdjust(lat) - zoomAdjust(latitude),
+  };
+}
+
 /**
  * deck's globe controller with OrbitControls' buttons: a mouse's left drag
- * orbits, its right drag (or a modified left) pans; touch pans with one finger.
+ * orbits the Earth (orbitGlobe), its right drag (or a modified left) pans;
+ * touch pans with one finger.
  */
 export class OrbitGlobeController extends GlobeController {
   _onPanStart(event) {
     // deck pans on the "alternate" drag (right button or a function key)
     // when dragMode is 'rotate', and on the plain one when it's 'pan'.
     this.dragMode = event.srcEvent?.pointerType === 'mouse' ? 'rotate' : 'pan';
+    const { longitude, latitude, zoom } = this.controllerState.getViewportProps();
+    this._orbitStart = { longitude, latitude, zoom };
     return super._onPanStart(event);
   }
 
   _onPanRotate(event) {
-    if (!this.dragRotate || !this.isDragging()) return false;
-    const d = orbitDelta(event.deltaX, event.deltaY, this.props.height);
-    // deck's globe doesn't clamp a rotation by angle; keep the pitch in range here
-    const { startPitch = 0 } = this.controllerState.getState();
-    const { minPitch = 0, maxPitch = 60 } = this.controllerState.getViewportProps();
-    const pitch = Math.max(minPitch, Math.min(maxPitch, startPitch + d.pitch)) - startPitch;
-    const s = this.controllerState.rotate({ deltaAngleX: d.bearing, deltaAngleY: pitch });
-    this.updateViewport(s, { transitionDuration: 0 }, { isDragging: true, isRotating: true });
+    if (!this.dragRotate || !this.isDragging() || !this._orbitStart) return false;
+    const next = orbitGlobe(this._orbitStart, event.deltaX, event.deltaY, this.props.height);
+    this.updateViewport(this.controllerState._getUpdatedState(next), { transitionDuration: 0 }, { isDragging: true, isRotating: true });
     return true;
   }
 
   _onPanRotateEnd() {
     if (!this.isDragging()) return false;
+    this._orbitStart = null;
     this.updateViewport(this.controllerState.rotateEnd(), { transitionDuration: 0 }, { isDragging: false, isRotating: false });
     return true;
   }
