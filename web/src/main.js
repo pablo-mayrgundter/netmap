@@ -3,6 +3,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { Deck, _GlobeView as GlobeView } from '@deck.gl/core';
 import { MapboxOverlay } from '@deck.gl/mapbox';
 import { DataFilterExtension } from '@deck.gl/extensions';
+import { OrbitGlobeController, wireMapOrbit, strafeGlobe } from './orbitControls.js';
 import { LineLayer, PathLayer, ScatterplotLayer } from '@deck.gl/layers';
 
 import { listDatasets, loadBundle } from './data.js';
@@ -163,6 +164,7 @@ mapRef = map;
 // The compass shows (and resets, on click) the rotation and pitch the arrow keys set.
 map.addControl(new maplibregl.NavigationControl({ showCompass: true, visualizePitch: true }), 'bottom-right');
 map.keyboard.disable(); // our own keys below: arrows tilt and rotate, WASD fly
+wireMapOrbit(map); // OrbitControls' mouse: left drag orbits, right drag pans (src/orbitControls.js)
 
 const crosshair = ({ isDragging }) => (isDragging ? 'grabbing' : 'crosshair');
 const overlay = new MapboxOverlay({ interleaved: false, layers: [], getTooltip: null, getCursor: crosshair });
@@ -177,6 +179,9 @@ let globeDevice = null; // deck's luma device, for the Orbits layer
 // depth range costs the globe's own layers some precision.
 const globeView = () => new GlobeView({ resolution: 5, farZMultiplier: orbitsWanted() ? 4 : 1 });
 let globeFar = 1;
+const GLOBE_MAX_PITCH = 60; // deck's default for the globe: past it the horizon fills the view
+// The globe's camera from the hash's or the map's numbers (zoom in globe units).
+const globeCamOf = (lon, lat, zoom, pitch = 0, bearing = 0) => ({ longitude: lon, latitude: lat, zoom, pitch: Math.min(GLOBE_MAX_PITCH, pitch), bearing, maxPitch: GLOBE_MAX_PITCH });
 let globeDrawn = false; // the globe has drawn a frame with the map's data
 function ensureGlobe() {
   if (globe) return globe;
@@ -197,7 +202,7 @@ function ensureGlobe() {
         setTimeout(syncOrbits);
       }
     },
-    initialViewState: (globeCam = { longitude: c.lng, latitude: c.lat, zoom: (globeZoom = Math.max(map.getZoom() - 0.6, 0)) }),
+    initialViewState: (globeCam = globeCamOf(c.lng, c.lat, (globeZoom = Math.max(map.getZoom() - 0.6, 0)), map.getPitch(), map.getBearing())),
     layers: [],
     onHover: onHover,
     onClick: onClick,
@@ -211,7 +216,9 @@ function ensureGlobe() {
       }
     },
     getCursor: crosshair,
-    controller: { doubleClickZoom: false }, // double-click picks a node (see wireControls)
+    // OrbitControls' mouse (src/orbitControls.js); double-click picks a node
+    // (see wireControls); the keys are ours (wireFlightKeys).
+    controller: { type: OrbitGlobeController, doubleClickZoom: false, keyboard: false },
   });
   return globe;
 }
@@ -1600,7 +1607,7 @@ function flyTo(i) {
   const lon = p[2 * i];
   const lat = p[2 * i + 1];
   if (state.view === 'globe') {
-    const vs = { longitude: lon, latitude: lat, zoom: 2.2, transitionDuration: 1200 };
+    const vs = { ...globeCam, longitude: lon, latitude: lat, zoom: 2.2, transitionDuration: 1200 };
     globeCam = vs;
     ensureGlobe().setProps({ initialViewState: vs });
   } else {
@@ -2004,6 +2011,8 @@ function hashParams() {
     h.set('lon', globeCam.longitude.toFixed(3));
     h.set('lat', globeCam.latitude.toFixed(3));
     h.set('z', (globeCam.zoom + 0.6).toFixed(2));
+    if (globeCam.pitch) h.set('pitch', globeCam.pitch.toFixed(1));
+    if (globeCam.bearing) h.set('bearing', globeCam.bearing.toFixed(1));
   } else {
     const c = map.getCenter();
     h.set('lon', c.lng.toFixed(3));
@@ -2076,7 +2085,7 @@ function applyHash() {
     const z = Number(h.get('z') ?? 1.6);
     if (state.view === 'globe') {
       globeZoom = Math.max(z - 0.6, 0);
-      ensureGlobe().setProps({ initialViewState: (globeCam = { longitude: lon, latitude: lat, zoom: globeZoom }) });
+      ensureGlobe().setProps({ initialViewState: (globeCam = globeCamOf(lon, lat, globeZoom, Number(h.get('pitch') ?? 0), Number(h.get('bearing') ?? 0))) });
     } else {
       map.jumpTo({ center: [lon, lat], zoom: z, pitch: Number(h.get('pitch') ?? 0), bearing: Number(h.get('bearing') ?? 0) });
     }
@@ -2124,7 +2133,7 @@ function wireControls() {
     if (v === 'globe') {
       const c = map.getCenter();
       const zoom = Math.max(map.getZoom() - 0.6, 0);
-      ensureGlobe().setProps({ initialViewState: (globeCam = { longitude: c.lng, latitude: c.lat, zoom }) });
+      ensureGlobe().setProps({ initialViewState: (globeCam = globeCamOf(c.lng, c.lat, zoom, map.getPitch(), map.getBearing())) });
       globeZoom = zoom; // link opacity follows the globe's zoom; keep it in sync
     }
     state.view = v;
@@ -2231,9 +2240,9 @@ function wireControls() {
 }
 
 // --- flight keys -------------------------------------------------------------
-// Held keys move the camera smoothly. 2D map: up/down pitch, left/right rotate
-// (bearing: roll about the view axis), A/D strafe, W/S zoom. Globe (no pitch
-// or rotation): arrows orbit, A/D orbit east-west, W/S zoom.
+// Held keys move the camera smoothly, the same in both views: up/down pitch,
+// left/right roll (bearing, about the view axis), W/S zoom (as the wheel
+// does), A/D strafe across the screen.
 
 const FLIGHT_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'w', 'a', 's', 'd']);
 const RATE = { pitch: 45, bearing: 75, zoom: 1.6, strafe: 0.7 }; // per second; strafe in viewport widths
@@ -2269,11 +2278,12 @@ function wireFlightKeys() {
     const strafe = axis('d', 'a');
     if (state.view === 'globe') {
       if (globe && globeCam) {
-        const deg = (60 * dt) / Math.pow(2, Math.max(0, globeCam.zoom)); // degrees per frame
+        const deg = (RATE.strafe * 90 * dt) / Math.pow(2, Math.max(0, globeCam.zoom)); // arc across the screen
         globeCam = {
           ...globeCam,
-          latitude: Math.max(-85, Math.min(85, globeCam.latitude + tilt * deg)),
-          longitude: globeCam.longitude + (turn + strafe) * deg,
+          ...(strafe ? strafeGlobe(globeCam, strafe * deg) : null),
+          pitch: Math.max(0, Math.min(GLOBE_MAX_PITCH, (globeCam.pitch || 0) + tilt * RATE.pitch * dt)),
+          bearing: (globeCam.bearing || 0) + turn * RATE.bearing * dt,
           zoom: Math.max(0, Math.min(12, globeCam.zoom + zoom * RATE.zoom * dt)),
           transitionDuration: 0,
         };
@@ -2611,7 +2621,7 @@ function appOrbits() {
 
 function flyToPoint(lon, lat, zoom) {
   if (state.view === 'globe') {
-    globeCam = { longitude: lon, latitude: lat, zoom: zoom !== undefined ? Math.max(0, zoom - 0.6) : Math.max(globeCam?.zoom ?? 0, 2.2), transitionDuration: 1200 };
+    globeCam = { ...globeCam, longitude: lon, latitude: lat, zoom: zoom !== undefined ? Math.max(0, zoom - 0.6) : Math.max(globeCam?.zoom ?? 0, 2.2), transitionDuration: 1200 };
     ensureGlobe().setProps({ initialViewState: globeCam });
     if (Math.abs(globeCam.zoom - globeZoom) > 0.05) (globeZoom = globeCam.zoom), renderSoon();
   } else {
