@@ -1,0 +1,112 @@
+{
+  "_comment": "netmap's dashboard (bizdash). propertyId is netmap's GA4 property (stream G-3PWPNFW02J). clientId is the dashboard's OAuth web client (public by design). ?demo=1 shows synthetic netmap-shaped data. See README.md.",
+  "title": "netmap",
+  "propertyId": "563081056",
+  "clientId": "632925268159-urtgf3usptbtik25k9d2ub4a8eg7vtbf.apps.googleusercontent.com",
+  "timezoneNote": "Hours are in the property's timezone. GA only sees viewers who allowed analytics (opt-in): read every count as a lower bound.",
+  "events": {
+    "dataset_load": { "label": "Map loads", "unit": "loads" },
+    "permalink_open": { "label": "Permalinks opened" },
+    "mode_change": { "label": "Mode changes" },
+    "globe_toggle": { "label": "Globe toggles" },
+    "orbits_toggle": { "label": "Orbit layer toggles" },
+    "search": { "label": "Searches" },
+    "as_select": { "label": "ASes selected", "unit": "selections" },
+    "route_trace": { "label": "Routes traced", "unit": "routes" },
+    "app_open": { "label": "Apps opened", "unit": "opens" },
+    "app_close": { "label": "Apps closed" },
+    "basemap_change": { "label": "Basemap changes" },
+    "renderer_change": { "label": "Renderer changes" },
+    "style_change": { "label": "Style changes" }
+  },
+  "chart": { "secondary": "dataset_load" },
+  "tiles": [
+    { "event": "dataset_load", "label": "Loaded a map" },
+    { "event": "as_select", "label": "Selected an AS" },
+    { "event": "route_trace", "label": "Traced a route" },
+    { "event": "app_open", "label": "Opened an app" }
+  ],
+  "breakdowns": [
+    { "key": "sources", "title": "Users by source", "dimension": "sessionSource" },
+    { "key": "countries", "title": "Map loads + users by country", "dimension": "country", "pairEvent": "dataset_load" }
+  ],
+  "realtime": {
+    "tops": [
+      { "key": "events", "title": "Events right now", "dimension": "eventName" },
+      { "key": "countries", "title": "Top countries", "dimension": "country" },
+      { "key": "devices", "title": "Devices", "dimension": "deviceCategory" }
+    ]
+  },
+  "funnel": {
+    "title": "Funnel by first channel",
+    "steps": [
+      { "key": "loaded", "label": "Loaded a map", "short": "Map", "events": ["dataset_load"] },
+      { "key": "explored", "label": "Changed mode, globe or orbits", "short": "Explored",
+        "events": ["mode_change", "globe_toggle", "orbits_toggle"] },
+      { "key": "found", "label": "Found an AS (search hit or selection)", "short": "Found AS",
+        "events": ["search", "as_select"],
+        "filter": { "orGroup": { "expressions": [
+          { "filter": { "fieldName": "eventName", "stringFilter": { "value": "as_select", "caseSensitive": true } } },
+          { "filter": { "fieldName": "customEvent:result", "stringFilter": { "value": "hit", "caseSensitive": true } } }
+        ] } },
+        "fallback": { "events": ["as_select"],
+                      "note": "AS selections only: register the custom dimension result to count search hits" } },
+      { "key": "deeper", "label": "Traced a route or opened an app", "short": "Route/app",
+        "events": ["route_trace", "app_open"] }
+    ]
+  },
+  "traffic": { "siteHosts": ["pablo-mayrgundter.github.io"] },
+  "spikes": { "z": 4.0, "minExtra": 8, "lookbackDays": 14 },
+  "links": {
+    "ga": "https://analytics.google.com/analytics/web/#/p{propertyId}/reports/intelligenthome",
+    "extra": [
+      { "label": "netmap", "url": "https://pablo-mayrgundter.github.io/netmap/" },
+      { "label": "What netmap sends", "url": "https://github.com/pablo-mayrgundter/netmap#analytics" }
+    ]
+  },
+  "plugins": [
+    "plugins/consent-note.js",
+    "plugins/apps.js",
+    "plugins/datasets-and-modes.js",
+    "plugins/top-ases.js"
+  ],
+  "demo": {
+    "siteHost": "pablo-mayrgundter.github.io",
+    "usersPerHour": 9,
+    "events": [
+      { "name": "permalink_open", "rate": 0.14,
+        "params": { "has_route": ["0", "0", "1"], "has_sel": ["0", "1", "1"], "has_camera": ["1"],
+                    "dataset_id": ["internet", "internet", "internet", "routers"] } },
+      { "name": "dataset_load", "rate": 0.76, "repeat": 3,
+        "params": { "dataset_id": ["internet", "internet", "internet", "internet", "routers"],
+                    "trigger": ["boot", "boot", "boot", "picker", "hash"] } },
+      { "name": "mode_change", "rate": 0.45, "repeat": 5, "requires": "dataset_load",
+        "params": { "mode": ["geo", "hybrid", "hybrid", "cyber", "cyber", "cyber"], "via": ["slider", "slider", "button", "key"] } },
+      { "name": "globe_toggle", "rate": 0.3, "repeat": 3, "requires": "dataset_load",
+        "params": { "to": ["map", "globe"] } },
+      { "name": "orbits_toggle", "rate": 0.09, "repeat": 3, "requires": "dataset_load",
+        "params": { "layer": ["orbits", "sats", "starlink", "starlink", "iridium", "dsn"], "on": ["1", "1", "0"] } },
+      { "name": "style_change", "rate": 0.12, "repeat": 3, "requires": "dataset_load",
+        "params": { "control": ["fibers", "pops", "backbone", "bundle", "labels"] } },
+      { "name": "basemap_change", "rate": 0.05, "requires": "dataset_load",
+        "params": { "basemap": ["dark", "light", "satellite"] } },
+      { "name": "renderer_change", "rate": 0.03, "requires": "dataset_load",
+        "params": { "renderer": ["webgl", "deck"] } },
+      { "name": "search", "rate": 0.42, "repeat": 3, "requires": "mode_change",
+        "params": { "result": ["hit", "hit", "hit", "miss"] } },
+      { "name": "as_select", "rate": 0.5, "repeat": 5, "requires": "mode_change",
+        "params": {
+          "asn": ["14593", "14593", "14593", "13335", "13335", "13335", "15169", "15169", "3356", "3356", "174", "174",
+                  "1299", "1299", "16509", "16509", "8075", "6939", "6939", "2914", "32934", "7018", "3320", "4134",
+                  "701", "20940", "6453", "3257", "9002", "714", "2906", "36561", "6461", "3491", "4837", "12389"],
+          "how": ["search", "click", "click", "dblclick", "neighbour"],
+          "role": ["explore", "explore", "waypoint"] } },
+      { "name": "route_trace", "rate": 0.4, "repeat": 2, "requires": "as_select",
+        "params": { "source": ["search", "search", "traceroute", "permalink"], "found": ["1", "1", "1", "0"] } },
+      { "name": "app_open", "rate": 0.14, "repeat": 2, "requires": "as_select",
+        "params": { "app_id": ["starlink"] } },
+      { "name": "app_close", "rate": 0.6, "requires": "app_open",
+        "params": { "app_id": ["starlink"] } }
+    ]
+  }
+}

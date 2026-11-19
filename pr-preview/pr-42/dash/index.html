@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bizdash</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="styles.css">
+<!-- Everything a deployment changes lives in bizdash.config.json (and its
+     plugin cards); this file is the same for every deployment. -->
+<script type="module" src="src/app.js"></script>
+</head>
+<body class="viz-root">
+<header class="top">
+  <h1 id="title">bizdash</h1>
+  <a class="prop" id="prop" target="_blank" rel="noopener"></a>
+  <span class="live"><span class="dot"></span><span id="liveNote">loading…</span></span>
+  <span class="demo-badge" id="demoBadge" hidden>demo data</span>
+  <span class="actions" id="headerActions">
+    <button class="action" id="copyData" type="button" title="Copy a plain-text snapshot of the current view">Copy data</button>
+    <button class="action" id="signin" type="button" hidden>Sign in with Google</button>
+  </span>
+</header>
+
+<div class="filters" id="rangeToggle" role="group" aria-label="Date range"><span class="label">Range</span></div>
+<div class="segments" id="segmentToggle" role="group" aria-label="Traffic filter" hidden>
+  <span class="label">Traffic filter</span>
+  <button type="button" data-segment="all" aria-pressed="false">All</button>
+  <button type="button" data-segment="standard" aria-pressed="false">Standard</button>
+  <button type="button" data-segment="nonstandard" aria-pressed="false">Non-standard</button>
+  <span class="seg-rule" id="segmentRule"></span>
+</div>
+
+<div class="notice" id="notice" role="status"></div>
+<main class="grid" id="grid"></main>
+<footer class="page-foot" id="pageFoot"></footer>
+</body>
+</html>

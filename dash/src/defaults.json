@@ -1,0 +1,156 @@
+{
+  "_comment": "Defaults for bizdash.config.json, read by both the SPA (config.js) and Python (bizdash/config.py). `config` is merged under a deployment's file; `sections` fill in funnel, conversions and traffic when a deployment enables them.",
+  "config": {
+    "title": "Traffic",
+    "propertyId": "",
+    "clientId": "",
+    "timezoneNote": "Hours are in the property's timezone.",
+    "ranges": [
+      30,
+      60,
+      1440,
+      10080,
+      43200,
+      129600
+    ],
+    "defaultRange": 1440,
+    "refresh": {
+      "realtimeSeconds": 30,
+      "rangeSeconds": 300
+    },
+    "links": {
+      "ga": "https://analytics.google.com/analytics/web/#/p{propertyId}/reports/intelligenthome",
+      "errorTracker": null,
+      "extra": []
+    },
+    "events": {},
+    "chart": {
+      "secondary": null
+    },
+    "tiles": [],
+    "breakdowns": [
+      {
+        "key": "sources",
+        "title": "Users by source",
+        "dimension": "sessionSource"
+      },
+      {
+        "key": "pages",
+        "title": "Users by page",
+        "dimension": "pagePath"
+      },
+      {
+        "key": "countries",
+        "title": "Users by country",
+        "dimension": "country",
+        "pairEvent": null
+      }
+    ],
+    "realtime": {
+      "tops": [
+        {
+          "key": "pages",
+          "title": "Top pages right now",
+          "dimension": "unifiedScreenName"
+        },
+        {
+          "key": "countries",
+          "title": "Top countries",
+          "dimension": "country"
+        },
+        {
+          "key": "devices",
+          "title": "Devices",
+          "dimension": "deviceCategory"
+        }
+      ]
+    },
+    "funnel": null,
+    "conversions": null,
+    "internalUsers": {
+      "dimension": null,
+      "ids": {},
+      "label": "internal"
+    },
+    "traffic": null,
+    "spikes": {
+      "z": 4.0,
+      "minExtra": 15,
+      "lookbackDays": 14
+    },
+    "layout": {
+      "order": [],
+      "hide": []
+    },
+    "plugins": [],
+    "ga": {
+      "maxConcurrent": 5,
+      "reportCacheSeconds": 300,
+      "realtimeCacheSeconds": 25
+    },
+    "demo": {
+      "siteHost": "www.example.com",
+      "usersPerHour": 14,
+      "events": [],
+      "customDimensions": []
+    }
+  },
+  "sections": {
+    "funnel": {
+      "title": "Funnel by first channel",
+      "lookbackDays": 90,
+      "channelDimension": "firstUserDefaultChannelGroup",
+      "channels": [
+        "Paid",
+        "Organic",
+        "Direct",
+        "Referral",
+        "Other"
+      ],
+      "channelBuckets": {
+        "Paid Search": "Paid",
+        "Display": "Paid",
+        "Paid Social": "Paid",
+        "Paid Video": "Paid",
+        "Paid Shopping": "Paid",
+        "Paid Other": "Paid",
+        "Cross-network": "Paid",
+        "Organic Search": "Organic",
+        "Organic Social": "Organic",
+        "Organic Video": "Organic",
+        "Organic Shopping": "Organic",
+        "Direct": "Direct",
+        "Referral": "Referral"
+      },
+      "steps": []
+    },
+    "conversions": {
+      "title": "Recent conversions",
+      "events": [],
+      "lookbackDays": 90,
+      "cap": 50
+    },
+    "traffic": {
+      "siteHosts": [],
+      "rule": null,
+      "rev": null,
+      "label": null,
+      "labels": {
+        "all": "All",
+        "standard": "Standard",
+        "nonstandard": "Non-standard"
+      },
+      "default": "standard",
+      "fingerprint": [
+        "hostName",
+        "city",
+        "screenResolution",
+        "operatingSystemWithVersion",
+        "browser",
+        "landingPage",
+        "newVsReturning"
+      ],
+      "leakEvents": []
+    }
+  }
+}

@@ -1,0 +1,317 @@
+{
+ "schema": 1,
+ "kind": "starlink",
+ "name": "Starlink (AS14593)",
+ "asn": 14593,
+ "fetched_at": "2026-11-19T22:43:36Z",
+ "generated": "2026-11-19T22:43:36Z",
+ "sources": {
+  "feed": {
+   "url": "https://geoip.starlinkisp.net/feed.csv",
+   "sha256": "d5fd397ea3c9f6f988e4f502fb26bb1622f7ed5bd3f0a3adf9867ee18f18beaf",
+   "bytes": 521300,
+   "fetched_at": "2026-11-19T22:43:36Z",
+   "rows": 13103,
+   "skipped": 0
+  },
+  "pops": {
+   "url": "https://geoip.starlinkisp.net/pops.csv",
+   "sha256": "6f338ddf7564fc1d16e8185916a1168971c80a54f39c29b60a81a1bb3eed3865",
+   "bytes": 121759,
+   "fetched_at": "2026-11-19T22:43:36Z",
+   "rows": 4122,
+   "skipped": 0
+  },
+  "ourairports_airports": {
+   "url": "https://raw.githubusercontent.com/davidmegginson/ourairports-data/main/airports.csv",
+   "sha256": "73b5022692ba9739ba61b66e1f82ea1410597991c64a9274c5d40e3753b72664",
+   "bytes": 12762398,
+   "fetched_at": "2026-11-19T22:43:36Z"
+  },
+  "ourairports_regions": {
+   "url": "https://raw.githubusercontent.com/davidmegginson/ourairports-data/main/regions.csv",
+   "sha256": "9220d6582b804cfdec8432e5bb21456699c9df8969bf5d8886beb62ff0b1318b",
+   "bytes": 485265,
+   "fetched_at": "2026-11-19T22:43:37Z"
+  },
+  "ourairports_countries": {
+   "url": "https://raw.githubusercontent.com/davidmegginson/ourairports-data/main/countries.csv",
+   "sha256": "2a9dbee691125b0cdb8ceb5fe227c48c903f99c488963b8e53e2ab366521c639",
+   "bytes": 24583,
+   "fetched_at": "2026-11-19T22:43:37Z"
+  }
+ },
+ "counts": {
+  "pops": 66,
+  "pops_located": 65,
+  "prefixes": 13103,
+  "v4_prefixes": 5695,
+  "v6_prefixes": 7408,
+  "feed_prefixes": 13103,
+  "prefixes_with_pop": 4122,
+  "feed_prefixes_without_pop": 8981,
+  "pop_prefixes_not_in_feed": 0,
+  "v4_addresses": 896596,
+  "v4_addresses_with_pop": 841120,
+  "regions": 6173,
+  "regions_by_precision": {
+   "none": 3,
+   "city": 5136,
+   "country": 181,
+   "region": 853
+  },
+  "countries": 238
+ },
+ "unmatched": {
+  "iata": [
+   {
+    "code": "kentwax2",
+    "iata": "staging2",
+    "prefixes": 3
+   }
+  ],
+  "regions": [
+   {
+    "country": "PN",
+    "region": "",
+    "city": "Adamstown"
+   },
+   {
+    "country": "SJ",
+    "region": "",
+    "city": "Longyearben"
+   },
+   {
+    "country": "TK",
+    "region": "",
+    "city": "Atafu"
+   }
+  ]
+ },
+ "diff": {
+  "previous": {
+   "snapshot": "2026-10-20T03:48:00Z",
+   "pops": {
+    "url": "https://raw.githubusercontent.com/clarkzjw/starlink-geoip-data/master/pop/202610/pops-20261020-0348.csv",
+    "sha256": "5b40ecbeb7e01719f4e5006ed6a230d750092d5afaa978c50985396dfcbef43b",
+    "bytes": 120859,
+    "fetched_at": "2026-11-19T22:43:39Z"
+   },
+   "feed": {
+    "url": "https://raw.githubusercontent.com/clarkzjw/starlink-geoip-data/master/feed/202610/feed-20261020-0348.csv",
+    "sha256": "5d40735acc60d75a9a3fa72852d25d08a1fe2e6d3db181cf51c44521c34a4487",
+    "bytes": 160198,
+    "fetched_at": "2026-11-19T22:43:39Z"
+   }
+  },
+  "pops_added": [],
+  "pops_removed": [],
+  "pop_prefix_counts": [
+   {
+    "code": "atlagax1",
+    "before": 104,
+    "after": 106
+   },
+   {
+    "code": "brseaus1",
+    "before": 28,
+    "after": 32
+   },
+   {
+    "code": "chcoilx1",
+    "before": 128,
+    "after": 131
+   },
+   {
+    "code": "clgycan1",
+    "before": 60,
+    "after": 62
+   },
+   {
+    "code": "dhkabgd1",
+    "before": 6,
+    "after": 9
+   },
+   {
+    "code": "dllstxx1",
+    "before": 131,
+    "after": 125
+   },
+   {
+    "code": "frntdeu1",
+    "before": 163,
+    "after": 159
+   },
+   {
+    "code": "gtmygtm1",
+    "before": 53,
+    "after": 55
+   },
+   {
+    "code": "jhngzaf1",
+    "before": 103,
+    "after": 104
+   },
+   {
+    "code": "kllrmys1",
+    "before": 25,
+    "after": 22
+   },
+   {
+    "code": "knsymox1",
+    "before": 63,
+    "after": 69
+   },
+   {
+    "code": "mlbeaus1",
+    "before": 35,
+    "after": 39
+   },
+   {
+    "code": "mmmiflx1",
+    "before": 194,
+    "after": 191
+   },
+   {
+    "code": "nrbiken1",
+    "before": 139,
+    "after": 136
+   },
+   {
+    "code": "nwyynyx1",
+    "before": 90,
+    "after": 93
+   },
+   {
+    "code": "prtebra1",
+    "before": 20,
+    "after": 22
+   },
+   {
+    "code": "stcmswe1",
+    "before": 31,
+    "after": 34
+   },
+   {
+    "code": "sydyaus1",
+    "before": 98,
+    "after": 104
+   },
+   {
+    "code": "tmpeazx1",
+    "before": 70,
+    "after": 78
+   }
+  ],
+  "prefixes_assigned": 37,
+  "prefixes_unassigned": 7,
+  "prefixes_moved": 12,
+  "moves": [
+   {
+    "from": "dllstxx1",
+    "to": "tmpeazx1",
+    "prefixes": 4
+   },
+   {
+    "from": "frntdeu1",
+    "to": "stcmswe1",
+    "prefixes": 3
+   },
+   {
+    "from": "kllrmys1",
+    "to": "dhkabgd1",
+    "prefixes": 3
+   },
+   {
+    "from": "dllstxx1",
+    "to": "knsymox1",
+    "prefixes": 2
+   }
+  ],
+  "moved": [
+   [
+    "179.64.124.0/24",
+    "dllstxx1",
+    "knsymox1"
+   ],
+   [
+    "179.64.125.0/24",
+    "dllstxx1",
+    "knsymox1"
+   ],
+   [
+    "179.65.114.0/24",
+    "kllrmys1",
+    "dhkabgd1"
+   ],
+   [
+    "179.65.115.0/24",
+    "kllrmys1",
+    "dhkabgd1"
+   ],
+   [
+    "179.65.172.0/24",
+    "dllstxx1",
+    "tmpeazx1"
+   ],
+   [
+    "179.65.173.0/24",
+    "dllstxx1",
+    "tmpeazx1"
+   ],
+   [
+    "179.65.174.0/24",
+    "dllstxx1",
+    "tmpeazx1"
+   ],
+   [
+    "179.65.175.0/24",
+    "dllstxx1",
+    "tmpeazx1"
+   ],
+   [
+    "216.128.16.0/24",
+    "frntdeu1",
+    "stcmswe1"
+   ],
+   [
+    "216.128.17.0/24",
+    "frntdeu1",
+    "stcmswe1"
+   ],
+   [
+    "2406:2d40:d500::/40",
+    "kllrmys1",
+    "dhkabgd1"
+   ],
+   [
+    "2a0d:3344:3800::/40",
+    "frntdeu1",
+    "stcmswe1"
+   ]
+  ],
+  "moved_truncated": false,
+  "feed": {
+   "prefixes_added": 8574,
+   "prefixes_removed": 1,
+   "prefixes_relocated": 6
+  }
+ },
+ "diff_error": null,
+ "files": {
+  "pops.json": 52958,
+  "prefixes.json": 561619,
+  "regions.json": 1528416
+ },
+ "attribution": [
+  "Starlink geofeed and PoP list: <a href=\"https://geoip.starlinkisp.net/feed.csv\">geoip.starlinkisp.net</a>",
+  "Airports, regions and countries: <a href=\"https://ourairports.com/data/\">OurAirports</a> (public domain)",
+  "Previous snapshot: <a href=\"https://github.com/clarkzjw/starlink-geoip-data\">clarkzjw/starlink-geoip-data</a> (CC BY-SA 4.0)"
+ ],
+ "caveats": [
+  "A prefix's PoP is the one Starlink assigns that address block to; it does not reliably predict which PoP a given user's traffic leaves through.",
+  "Before October 2025 Starlink published no PoP list; PoP mappings from then (e.g. in clarkzjw/starlink-geoip-data's geoip/ directory) came from DNS PTR records, which were often stale.",
+  "The feed's city is the region Starlink sells into, not always a real town (mines, research stations), and customers can be hundreds of km away from it.",
+  "PoP locations are their IATA airport's coordinates, not the facility's."
+ ]
+}
