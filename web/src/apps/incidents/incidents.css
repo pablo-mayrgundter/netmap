@@ -1,0 +1,28 @@
+/* The Incidents app (app.js). */
+.inc-swatch { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin: 0 6px 0 0; vertical-align: 0; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5); }
+.inc-swatch.line { width: 14px; height: 3px; border-radius: 2px; vertical-align: 3px; margin-right: 3px; }
+.inc-linked { font-size: 12px; }
+.inc-events { list-style: none; margin: 0; padding: 0; }
+.inc-events .app-link { white-space: normal; font-size: 12px; }
+.inc-events .app-link.on { background: rgba(255, 120, 60, 0.14); border-radius: 4px; }
+.inc-events .app-link.on b { color: var(--accent); }
+.inc-event { margin: 10px 0; padding: 4px 10px 6px; border: 1px solid var(--line); border-left: 3px solid rgb(255, 120, 60); border-radius: 6px; }
+.inc-event > h3:first-child { margin-top: 6px; color: inherit; }
+.inc-stepper { display: flex; align-items: center; gap: 6px; margin: 6px 0; }
+.inc-stepper input { flex: 1; min-width: 0; }
+.inc-stepper .btn { padding: 2px 10px; }
+.inc-steps { list-style: none; margin: 0; padding: 0; }
+.inc-steps li { border-left: 2px solid var(--line); padding: 0 0 0 8px; }
+.inc-steps li.on { border-left-color: rgb(255, 120, 60); }
+.inc-steps li p { margin: 2px 0 8px; font-size: 12px; }
+.inc-steps .app-link { font-size: 12px; padding-top: 3px; padding-bottom: 3px; white-space: normal; }
+.inc-steps li.on .app-link { color: var(--accent); font-weight: 600; }
+.inc-time { display: block; font-size: 11px; color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
+.inc-places .app-link { white-space: normal; }
+.inc-hit { background: rgba(255, 214, 120, 0.14); border-radius: 4px; }
+.inc-detail { margin: 6px 0 10px; padding: 6px 10px; border: 1px solid var(--line); border-left: 3px solid rgb(255, 214, 120); border-radius: 6px; font-size: 12px; }
+.inc-detail p { margin: 4px 0; }
+.inc-legend, .inc-sources { margin: 4px 0; padding-left: 0; list-style: none; font-size: 12px; }
+.inc-legend li { margin: 3px 0; }
+.inc-sources li { margin: 2px 0; }
+.inc-sources a { color: var(--accent); }
