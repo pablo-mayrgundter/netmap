@@ -4,7 +4,7 @@
  "name": "Starlink (AS14593)",
  "asn": 14593,
  "fetched_at": "2026-11-20T02:39:28Z",
- "generated": "2026-11-20T02:39:28Z",
+ "generated": "2026-11-20T03:41:54Z",
  "sources": {
   "feed": {
    "url": "https://geoip.starlinkisp.net/feed.csv",
