@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CITIES, CABLES } from './data.js';
-import { buildCableNet, routeFibers, layoutLanes, maxLanesAt, nearestNode, gcKm, lineColour, LINE_COLOURS } from './net.js';
+import { buildCableNet, routeFibers, layoutLanes, maxLanesAt, minCountAt, nearestNode, gcKm, lineColour, LINE_COLOURS } from './net.js';
 
 const net = buildCableNet();
 const at = (key) => {
@@ -87,7 +87,7 @@ test('lanes: biggest fibers first, each drawn end to end or not at all, within t
   const trunk = corridor('shirley', 'bude').id;
   assert.ok(L.lanes[trunk].length <= 3);
   assert.ok(L.overflow[trunk] > 0);
-  assert.equal(L.width[trunk], L.lanes[trunk].length + 1, 'the grey lane');
+  assert.equal(L.width[trunk], L.lanes[trunk].length);
   assert.equal(L.drawn[0], 1, 'the biggest fiber is drawn');
   for (let i = 0; i < fibers.length; i++) {
     if (!routes[i]) continue;
@@ -111,6 +111,17 @@ test('lanes are ordered by the side a fiber comes from and goes to', () => {
     const offs = lanes.map((l) => l.offset);
     assert.deepEqual(offs, offs.slice().sort((x, y) => x - y));
   }
+});
+
+test('small fibers stay off the cables until you zoom in', () => {
+  const fibers = [fiber('nyc', 'lon', 500), fiber('nyc', 'ams', 20), fiber('ash', 'par', 3)];
+  const routes = routeFibers(net, fibers);
+  const far = layoutLanes(net, fibers, routes, 48, minCountAt(1.6, 500));
+  assert.deepEqual([...far.drawn], [1, 0, 0]);
+  const near = layoutLanes(net, fibers, routes, 48, minCountAt(5, 500));
+  assert.deepEqual([...near.drawn], [1, 1, 1]);
+  assert.ok(minCountAt(2.5, 500) < minCountAt(1.6, 500));
+  assert.equal(minCountAt(10, 500), 2);
 });
 
 test('more lanes as you zoom in, from a CWDM link to a subway trunk', () => {

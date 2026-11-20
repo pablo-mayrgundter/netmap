@@ -221,12 +221,25 @@ export function routeFibers(net, fibers, { snapKm = 900, stretch = 2.2, slackKm 
 export const maxLanesAt = (zoom) => Math.max(4, Math.min(48, Math.round(4 * Math.pow(2, zoom / 2))));
 
 /**
+ * The smallest fiber that rides the cables as a lane at a zoom, given the
+ * biggest: at world scale only those within ~2.5x of the biggest (the few
+ * trunks 10-100x the rest), a tenth of the biggest by z 2.5, and by z 4.5
+ * nearly all. Smaller fibers stay plain lines, like the links they bundle, so
+ * the far view reads as the links do and the cables fill in as you zoom.
+ */
+export function minCountAt(zoom, maxCount) {
+  const ratio = Math.pow(10, Math.max(0, zoom - 1) / 1.5);
+  return Math.max(2, maxCount / ratio);
+}
+
+/**
  * Lanes: which fibers a corridor carries side by side, and in what order.
  *
- * Fibers are taken biggest first, and one is drawn only if every corridor on
- * its route has a lane free (`maxLanes`), so a drawn fiber is one continuous
- * line from end to end, like a subway line. The rest are counted as each
- * corridor's `overflow`, drawn as one grey lane.
+ * Fibers of at least `minCount` links are taken biggest first, and one is
+ * drawn only if every corridor on its route has a lane free (`maxLanes`), so
+ * a drawn fiber is one continuous line from end to end, like a subway line.
+ * Those that don't fit are counted as each corridor's `overflow` (the caller
+ * draws them, and the smaller ones, as plain lines).
  *
  * Across a corridor (a to b), lanes are ordered by where their fiber comes
  * from and goes to: one that arrives from the right of the corridor's line
@@ -235,16 +248,16 @@ export const maxLanesAt = (zoom) => Math.max(4, Math.min(48, Math.round(4 * Math
  * lane widths: negative is left of a -> b.
  *
  * Returns { drawn: Uint8Array per fiber, lanes: per corridor [{ fiber,
- * offset }], overflow: per corridor count, width: per corridor lane count
- * (with the grey lane), nodeWidth: per station the widest corridor there }.
+ * offset }], overflow: per corridor count, width: per corridor lane count,
+ * nodeWidth: per station the widest corridor there }.
  */
-export function layoutLanes(net, fibers, routes, maxLanes) {
+export function layoutLanes(net, fibers, routes, maxLanes, minCount = 0) {
   const C = net.corridors.length;
   const used = new Uint16Array(C);
   const overflow = new Uint32Array(C);
   const drawn = new Uint8Array(fibers.length);
   const order = [];
-  for (let i = 0; i < fibers.length; i++) if (routes[i]) order.push(i);
+  for (let i = 0; i < fibers.length; i++) if (routes[i] && fibers[i].count >= minCount) order.push(i);
   order.sort((x, y) => fibers[y].count - fibers[x].count || x - y);
   const members = Array.from({ length: C }, () => []);
   for (const i of order) {
@@ -279,7 +292,7 @@ export function layoutLanes(net, fibers, routes, maxLanes) {
       return { i, key: right(before) + right(after) };
     });
     keyed.sort((x, y) => x.key - y.key || x.i - y.i);
-    const n = keyed.length + (overflow[c] ? 1 : 0);
+    const n = keyed.length;
     width[c] = n;
     lanes[c] = keyed.map((m, j) => ({ fiber: m.i, offset: j - (n - 1) / 2 }));
   }
@@ -292,13 +305,11 @@ export function layoutLanes(net, fibers, routes, maxLanes) {
   return { drawn, lanes, overflow, width, nodeWidth };
 }
 
-// Subway-map colours, bright enough for the dark globe. Grey is the overflow
-// lane's.
+// Subway-map colours, bright enough for the dark globe.
 export const LINE_COLOURS = [
   [238, 53, 46], [255, 128, 32], [252, 204, 10], [0, 170, 80], [140, 205, 70], [50, 120, 235],
   [0, 185, 220], [190, 70, 190], [175, 120, 70], [245, 125, 185], [140, 100, 230], [20, 195, 165],
 ];
-export const OVERFLOW_COLOUR = [150, 155, 165];
 
 /** A fiber's line colour, from where its ends are, so it keeps its colour as filters change. */
 export function lineColour(f) {

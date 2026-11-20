@@ -23,8 +23,8 @@ import { composeLayers } from './apps/layers.js';
 import { createSidebar } from './apps/sidebar.js';
 import { analytics, track, countBucket } from './analytics.js';
 import { mountConsent } from './consent.js';
-import { buildCableNet, routeFibers, layoutLanes, maxLanesAt } from './cables/net.js';
-import { cableScene, cableLayers, LIFT_M as CABLE_LIFT_M, LANE_SPACING } from './cables/layers.js';
+import { buildCableNet, routeFibers, layoutLanes, maxLanesAt, minCountAt } from './cables/net.js';
+import { cableScene, cableLayers, subwayAt, LIFT_M as CABLE_LIFT_M, LANE_SPACING } from './cables/layers.js';
 
 // Material Icons (Apache-2.0), the same glyphs as MUI's icons, inlined as SVG.
 import hubIcon from '@material-design-icons/svg/filled/hub.svg?raw';
@@ -180,7 +180,10 @@ let globeDevice = null; // deck's luma device, for the Orbits layer
 // reaches GEO (6.6 Earth radii); 4x the far plane covers it from any zoom
 // ((altitude + 7.6 R) < 4 (altitude + 2 R)). Only while it's on: the wider
 // depth range costs the globe's own layers some precision.
-const globeView = () => new GlobeView({ resolution: 5, farZMultiplier: orbitsWanted() ? 4 : 1 });
+// resolution: the most degrees between the vertices deck tessellates the
+// ocean, land and grid into. At 5° a cell's middle sagged ~12 km under the
+// sphere, and lines floating over it z-fought it; at 2°, ~2 km.
+const globeView = () => new GlobeView({ resolution: 2, farZMultiplier: orbitsWanted() ? 4 : 1 });
 let globeFar = 1;
 const GLOBE_MAX_PITCH = 90; // the arrows sweep from straight down to the horizon
 // The globe's camera from the hash's or the map's numbers (zoom in globe units).
@@ -730,13 +733,15 @@ function computeFibers() {
   return fiberCache.value;
 }
 
-// The fibers drawn as plain lines: all of them, or with cables on, those no
-// cable route carries (the rest are lanes in the cables, cableLayersFor).
+// The fibers drawn as plain lines: all of them, or with cables on, those not
+// drawn as lanes in the cables (cableLayersFor): no route carries them, or
+// they're too small for the zoom, or their spans' lanes are full.
 let plainFibers = [];
 function fiberLayers(globeView, opacity) {
   const all = computeFibers().fibers;
   const routes = useCables() ? cableRoutes() : null;
-  const fibers = routes ? memo(`plain-fibers|${fiberCache.key}`, () => all.filter((_, i) => !routes[i])) : all;
+  const L = routes ? cableLanesAt(viewZoom(globeView)) : null;
+  const fibers = routes ? memo(`plain-fibers|${laneCache.key}`, () => all.filter((_, i) => !L.drawn[i])) : all;
   plainFibers = fibers;
   if (!fibers.length) return [];
   const w = (f) => 1 + Math.log2(1 + f.count) * (0.4 + 2.4 * state.fiberWidth);
@@ -748,7 +753,7 @@ function fiberLayers(globeView, opacity) {
   const fOpacity = Math.min(1, opacity * 1.5);
   const make = (id, width, k, pickable) => {
     if (globeView) {
-      const data = memo(`fiber-arcs|${fiberCache.key}|${!!routes}`, () => buildArcs(fibers.length, (i, a, b) => {
+      const data = memo(`fiber-arcs|${routes ? laneCache.key : fiberCache.key}`, () => buildArcs(fibers.length, (i, a, b) => {
         a[0] = fibers[i].source[0], a[1] = fibers[i].source[1], a[2] = fibers[i].source[2];
         b[0] = fibers[i].target[0], b[1] = fibers[i].target[1], b[2] = fibers[i].target[2];
       }, 0.04));
@@ -763,7 +768,7 @@ function fiberLayers(globeView, opacity) {
         opacity: fOpacity,
         pickable,
         parameters: blendParams(true),
-        updateTriggers: { getColor: `${state.fiberWidth}|${!!routes}`, getWidth: `${state.fiberWidth}|${!!routes}` }, // alpha ~ ink / width
+        updateTriggers: { getColor: `${state.fiberWidth}|${routes ? laneCache.key : ''}`, getWidth: `${state.fiberWidth}|${routes ? laneCache.key : ''}` }, // alpha ~ ink / width
       });
     }
     return new LineLayer({
@@ -777,7 +782,7 @@ function fiberLayers(globeView, opacity) {
       opacity: fOpacity,
       pickable,
       parameters: blendParams(false),
-      updateTriggers: { getColor: `${fiberCache.key}|${!!routes}|${state.fiberWidth}`, getWidth: `${fiberCache.key}|${!!routes}|${state.fiberWidth}` },
+      updateTriggers: { getColor: `${fiberCache.key}|${routes ? laneCache.key : ''}|${state.fiberWidth}`, getWidth: `${fiberCache.key}|${routes ? laneCache.key : ''}|${state.fiberWidth}` },
     });
   };
   // a faint halo under a core that carries most of the ink
@@ -790,8 +795,9 @@ function fiberLayers(globeView, opacity) {
 // length, from the stations nearest its ends) and drawn as a coloured lane in
 // every span it rides, side by side with the others, a white stop at each
 // station and a fan out to its own ends. How many lanes a span shows grows
-// with zoom, from a CWDM link's eight to a subway trunk's dozens; the rest
-// ride in one grey lane. Fibers no cable route carries stay plain lines.
+// with zoom, from a CWDM link's eight to a subway trunk's dozens, and so does
+// how small a fiber may be and still take one: far out only the trunks ride
+// the cables, close in nearly all. The rest stay plain fiber lines.
 let cableNet = null;
 const cableNetwork = () => (cableNet ??= buildCableNet());
 let cableRoutesCache = { key: null, value: null };
@@ -802,11 +808,20 @@ function cableRoutes() {
   }
   return cableRoutesCache.value;
 }
+// The lanes at a zoom: how many a span holds, and how big a fiber must be to
+// take one (net.js minCountAt: the trunks at world scale, all of them close
+// up). Zoom steps by a quarter, so a zoom doesn't lay them out every frame.
 let laneCache = { key: null, value: null };
-function cableLanes(maxLanes) {
+function cableLanesAt(zoom) {
   const routes = cableRoutes();
-  const key = `${fiberCache.key}|${maxLanes}`;
-  if (laneCache.key !== key) laneCache = { key, value: layoutLanes(cableNetwork(), fiberCache.value.fibers, routes, maxLanes) };
+  const z = Math.round(zoom * 4) / 4;
+  const fibers = fiberCache.value.fibers;
+  let biggest = 0;
+  for (const f of fibers) biggest = Math.max(biggest, f.count);
+  const maxLanes = maxLanesAt(z);
+  const minCount = minCountAt(z, biggest);
+  const key = `${fiberCache.key}|${maxLanes}|${minCount}`;
+  if (laneCache.key !== key) laneCache = { key, value: layoutLanes(cableNetwork(), fibers, routes, maxLanes, minCount) };
   return laneCache.value;
 }
 const viewZoom = (globeView) => (globeView ? globeZoom + 0.6 : map.getZoom());
@@ -817,7 +832,7 @@ function cableLayersFor(globeView, withFibers) {
   const z = viewZoom(globeView);
   let scene;
   if (withFibers) {
-    const L = cableLanes(maxLanesAt(z));
+    const L = cableLanesAt(z);
     scene = cableScene(net, fiberCache.value.fibers, cableRoutes(), L, globeView);
     cableShown = { net, fibers: fiberCache.value.fibers, routes: cableRoutes(), L, scene };
   } else {
@@ -831,7 +846,15 @@ function cableLayersFor(globeView, withFibers) {
   const maxLanes = withFibers ? maxLanesAt(z) : 1;
   const trunkPx = 10 * (1 + 0.25 * Math.max(0, z - 2)) * (0.5 + 5 * state.fiberWidth);
   const laneW = Math.max(0.5, Math.min(3, trunkPx / (maxLanes * LANE_SPACING)));
-  return cableLayers(scene, { laneW, labels: z >= 3, globe: globeView, showFibers: withFibers, facing: globeView ? facingCamera() : null });
+  return cableLayers(scene, {
+    laneW,
+    labels: z >= 3,
+    globe: globeView,
+    blend: blendParams(globeView),
+    subway: subwayAt(z),
+    showFibers: withFibers,
+    facing: globeView ? facingCamera() : null,
+  });
 }
 
 // On the globe: whether a station is on the camera's side of the Earth (above
@@ -868,14 +891,13 @@ function cableTooltip(info) {
   };
   switch (info.layer.id) {
     case 'cable-lanes':
-      if (o.fiber < 0) return `${fmt(o.overflow)} more fibers in this span (zoom in to see them as lanes)`;
       return fiberText(o.fiber);
     case 'cable-fans':
       return fiberText(o.fiber);
     case 'cable-corridors': {
       const a = net.nodes[o.a].name, b = net.nodes[o.b].name;
       const names = o.cables.map((n, j) => (o.years[j] ? `${n} (${o.years[j]})` : n)).join(', ');
-      const carried = L.lanes[o.id]?.length ? ` · ${fmt(L.lanes[o.id].length)} fibers${L.overflow[o.id] ? ` + ${fmt(L.overflow[o.id])} more` : ''}` : '';
+      const carried = L.lanes[o.id]?.length ? ` · ${fmt(L.lanes[o.id].length)} fibers as lanes${L.overflow[o.id] ? ` (${fmt(L.overflow[o.id])} more as plain lines: zoom in)` : ''}` : '';
       return `${names} · ${a} – ${b} · ${o.kind === 'sub' ? 'submarine' : 'overland'}, ~${fmt(Math.round(o.km))} km${carried}`;
     }
     case 'cable-stations': {
@@ -2104,8 +2126,9 @@ function syncControls() {
   $('coreLabel').textContent = G ? coreLabel() : '';
   const fib = useFibers() && fiberCache.value;
   const onCables = fib && useCables() && cableRoutesCache.key === fiberCache.key ? cableRoutesCache.value.filter(Boolean).length : 0;
+  const asLanes = onCables && laneCache.value ? laneCache.value.drawn.reduce((n, d) => n + d, 0) : 0;
   $('fiberLabel').textContent = fib
-    ? `~${Math.round(fiberCellSize() * 40075)} km cells · ${fmt(fib.fibers.length)} fibers carrying ${fmt(fib.bundled)} links${useCables() ? ` · ${fmt(onCables)} routed over cables` : ''}`
+    ? `~${Math.round(fiberCellSize() * 40075)} km cells · ${fmt(fib.fibers.length)} fibers carrying ${fmt(fib.bundled)} links${useCables() ? ` · ${fmt(onCables)} routed over cables, ${fmt(asLanes)} shown as lanes at this zoom` : ''}`
     : '';
   for (const b of $('mode').children) b.classList.toggle('on', b.dataset.v === state.mode);
   const nStops = (G?.meta.morph || [0, 0, 0]).length;
