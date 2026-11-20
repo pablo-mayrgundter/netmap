@@ -3,23 +3,23 @@
  "kind": "starlink",
  "name": "Starlink (AS14593)",
  "asn": 14593,
- "fetched_at": "2026-11-19T21:05:40Z",
- "generated": "2026-11-19T21:05:39Z",
+ "fetched_at": "2026-11-20T02:39:28Z",
+ "generated": "2026-11-20T02:39:28Z",
  "sources": {
   "feed": {
    "url": "https://geoip.starlinkisp.net/feed.csv",
-   "sha256": "d5fd397ea3c9f6f988e4f502fb26bb1622f7ed5bd3f0a3adf9867ee18f18beaf",
-   "bytes": 521300,
-   "fetched_at": "2026-11-19T21:05:40Z",
-   "rows": 13103,
+   "sha256": "865a75af0d43e3846e0cf259286a2b39850013437b5f806feecbfca5d5521816",
+   "bytes": 522067,
+   "fetched_at": "2026-11-20T02:39:28Z",
+   "rows": 13124,
    "skipped": 0
   },
   "pops": {
    "url": "https://geoip.starlinkisp.net/pops.csv",
-   "sha256": "6f338ddf7564fc1d16e8185916a1168971c80a54f39c29b60a81a1bb3eed3865",
-   "bytes": 121759,
-   "fetched_at": "2026-11-19T21:05:40Z",
-   "rows": 4122,
+   "sha256": "1ab35a7c23b45222efd2bb3d808436fd42d45d82a1acfd698b6afd9277cbba27",
+   "bytes": 122478,
+   "fetched_at": "2026-11-20T02:39:29Z",
+   "rows": 4146,
    "skipped": 0
   },
   "ourairports_airports": {
@@ -42,17 +42,17 @@
   }
  },
  "counts": {
-  "pops": 66,
-  "pops_located": 65,
-  "prefixes": 13103,
-  "v4_prefixes": 5695,
-  "v6_prefixes": 7408,
-  "feed_prefixes": 13103,
-  "prefixes_with_pop": 4122,
-  "feed_prefixes_without_pop": 8981,
+  "pops": 67,
+  "pops_located": 66,
+  "prefixes": 13124,
+  "v4_prefixes": 5709,
+  "v6_prefixes": 7415,
+  "feed_prefixes": 13124,
+  "prefixes_with_pop": 4146,
+  "feed_prefixes_without_pop": 8978,
   "pop_prefixes_not_in_feed": 0,
-  "v4_addresses": 896596,
-  "v4_addresses_with_pop": 841120,
+  "v4_addresses": 900180,
+  "v4_addresses_with_pop": 845216,
   "regions": 6173,
   "regions_by_precision": {
    "none": 3,
@@ -104,9 +104,16 @@
     "fetched_at": "2026-11-19T21:05:43Z"
    }
   },
-  "pops_added": [],
+  "pops_added": [
+   "djbidji1"
+  ],
   "pops_removed": [],
   "pop_prefix_counts": [
+   {
+    "code": "acklnzl1",
+    "before": 27,
+    "after": 30
+   },
    {
     "code": "atlagax1",
     "before": 104,
@@ -115,12 +122,17 @@
    {
     "code": "brseaus1",
     "before": 28,
-    "after": 32
+    "after": 35
    },
    {
     "code": "chcoilx1",
     "before": 128,
     "after": 131
+   },
+   {
+    "code": "chrhnzl1",
+    "before": 8,
+    "after": 11
    },
    {
     "code": "clgycan1",
@@ -133,9 +145,19 @@
     "after": 9
    },
    {
+    "code": "djbidji1",
+    "before": 0,
+    "after": 3
+   },
+   {
     "code": "dllstxx1",
     "before": 131,
     "after": 125
+   },
+   {
+    "code": "drwnaus1",
+    "before": 10,
+    "after": 13
    },
    {
     "code": "frntdeu1",
@@ -165,7 +187,7 @@
    {
     "code": "mlbeaus1",
     "before": 35,
-    "after": 39
+    "after": 42
    },
    {
     "code": "mmmiflx1",
@@ -188,6 +210,11 @@
     "after": 22
    },
    {
+    "code": "prthaus1",
+    "before": 32,
+    "after": 35
+   },
+   {
     "code": "stcmswe1",
     "before": 31,
     "after": 34
@@ -195,7 +222,7 @@
    {
     "code": "sydyaus1",
     "before": 98,
-    "after": 104
+    "after": 107
    },
    {
     "code": "tmpeazx1",
@@ -203,9 +230,9 @@
     "after": 78
    }
   ],
-  "prefixes_assigned": 37,
-  "prefixes_unassigned": 7,
-  "prefixes_moved": 12,
+  "prefixes_assigned": 58,
+  "prefixes_unassigned": 4,
+  "prefixes_moved": 15,
   "moves": [
    {
     "from": "dllstxx1",
@@ -223,12 +250,27 @@
     "prefixes": 3
    },
    {
+    "from": "nrbiken1",
+    "to": "djbidji1",
+    "prefixes": 3
+   },
+   {
     "from": "dllstxx1",
     "to": "knsymox1",
     "prefixes": 2
    }
   ],
   "moved": [
+   [
+    "9.170.88.0/24",
+    "nrbiken1",
+    "djbidji1"
+   ],
+   [
+    "9.170.89.0/24",
+    "nrbiken1",
+    "djbidji1"
+   ],
    [
     "179.64.124.0/24",
     "dllstxx1",
@@ -285,6 +327,11 @@
     "dhkabgd1"
    ],
    [
+    "2605:59c8:5800::/38",
+    "nrbiken1",
+    "djbidji1"
+   ],
+   [
     "2a0d:3344:3800::/40",
     "frntdeu1",
     "stcmswe1"
@@ -292,16 +339,16 @@
   ],
   "moved_truncated": false,
   "feed": {
-   "prefixes_added": 8574,
+   "prefixes_added": 8595,
    "prefixes_removed": 1,
    "prefixes_relocated": 6
   }
  },
  "diff_error": null,
  "files": {
-  "pops.json": 52958,
-  "prefixes.json": 561619,
-  "regions.json": 1528416
+  "pops.json": 53265,
+  "prefixes.json": 562166,
+  "regions.json": 1528461
  },
  "attribution": [
   "Starlink geofeed and PoP list: <a href=\"https://geoip.starlinkisp.net/feed.csv\">geoip.starlinkisp.net</a>",

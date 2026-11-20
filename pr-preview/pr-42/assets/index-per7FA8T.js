@@ -1,4 +1,4 @@
-import{c as N}from"./expression-Bl_GL2tO.js";import{aa as f,ab as v,ac as m,a7 as M,a8 as k,ad as V,ae as L,a4 as S,a3 as z,af as y,ag as R,ah as $,ai as _}from"./lineSet-BMiaM7zo.js";import{aj as fe}from"./lineSet-BMiaM7zo.js";const B=`fn arithmetic_add(x: {TYPE}, y: {TYPE}) -> {TYPE} {
+import{c as N}from"./expression-Bl_GL2tO.js";import{ab as f,ac as v,ad as m,a8 as k,a9 as M,ae as V,af as L,a5 as S,a4 as z,ag as y,ah as R,ai as $,aj as _}from"./lineSet-Bt00ucbv.js";import{ak as fe}from"./lineSet-Bt00ucbv.js";const B=`fn arithmetic_add(x: {TYPE}, y: {TYPE}) -> {TYPE} {
   return x + y;
 }
 
@@ -17,7 +17,7 @@ fn arithmetic_divide(x: {TYPE}, y: {TYPE}) -> {TYPE} {
 fn arithmetic_tan(x: f32) -> f32 {
   return tan_fp32(x);
 }
-`,Q=({inputs:n,output:e,target:r})=>{const t=e.type,s=f(t),i=v(t),o=n.namedInputs;return m({module:{name:"arithmetic",source:B,dependencies:[M]},inputs:o,output:e,operationType:t,outputBuffer:r,expression:c=>N(n.expression,{operations:k,inputs:o,laneIndex:c,formatInput:a=>`${a}[${c}]`,formatOutOfBoundsInput:a=>o[a].size===1?`${a}[0]`:i,formatLiteral:a=>{const l=Array.isArray(a)?a[c]??0:a;return`${s}(${V(t,l)})`},formatCall:(a,l)=>`${a}(${l.join(", ")})`})}),{success:!0}},Y=`fn row_dot(x: array<{TYPE}, {X_LEN}>, y: array<{TYPE}, {Y_LEN}>) -> array<f32, 1> {
+`,Q=({inputs:n,output:e,target:r})=>{const t=e.type,s=f(t),i=v(t),o=n.namedInputs;return m({module:{name:"arithmetic",source:B,dependencies:[k]},inputs:o,output:e,operationType:t,outputBuffer:r,expression:c=>N(n.expression,{operations:M,inputs:o,laneIndex:c,formatInput:a=>`${a}[${c}]`,formatOutOfBoundsInput:a=>o[a].size===1?`${a}[0]`:i,formatLiteral:a=>{const l=Array.isArray(a)?a[c]??0:a;return`${s}(${V(t,l)})`},formatCall:(a,l)=>`${a}(${l.join(", ")})`})}),{success:!0}},Y=`fn row_dot(x: array<{TYPE}, {X_LEN}>, y: array<{TYPE}, {Y_LEN}>) -> array<f32, 1> {
   var sum = 0.0;
   for (var i = 0u; i < {X_LEN}u; i = i + 1u) {
     sum += f32(x[i]) * f32(y[i]);
