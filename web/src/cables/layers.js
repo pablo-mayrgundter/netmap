@@ -10,7 +10,10 @@ import { PathLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 import { lineColour, OVERFLOW_COLOUR } from './net.js';
 
 const D2R = Math.PI / 180;
-export const LIFT_M = 6000; // cables sit just above the globe's surface, under the floating networks
+// Cables float this high over the globe's surface, under the floating
+// networks: high enough that the globe's mesh can't z-fight a lane where it
+// bends (a wide billboarded line's joins reach out past its centreline).
+export const LIFT_M = 30000;
 export const LANE_SPACING = 1.35; // lane pitch, in lane widths
 
 const offsetExt = new PathStyleExtension({ offset: true });
@@ -118,7 +121,7 @@ export function cableLayers(scene, { laneW, labels, globe, opacity = 1, showFibe
   const top = { depthWriteEnabled: false, depthCompare: 'always' };
   const stations = facing ? visibleOf(scene, 'stations', facing) : scene.stations;
   const busy = facing ? visibleOf(scene, 'busy', facing) : scene.busy;
-  const casingW = (c) => (showFibers && c.lanes ? c.lanes * laneW * LANE_SPACING + 4 : 1.4);
+  const casingW = (c) => (showFibers && c.lanes ? c.lanes * laneW * LANE_SPACING + 2 : 1.2);
   const common = { widthUnits: 'pixels', billboard: globe, parameters: params, jointRounded: true, capRounded: true };
   const trig = `${laneW}|${showFibers}`;
   const layers = [
@@ -128,7 +131,7 @@ export function cableLayers(scene, { laneW, labels, globe, opacity = 1, showFibe
       id: 'cable-rim',
       data: scene.corridors,
       getPath: (c) => c.path3,
-      getWidth: (c) => casingW(c) + 2,
+      getWidth: (c) => casingW(c) + 1.5,
       getColor: (c) => (showFibers && c.lanes ? [150, 165, 190, 150] : c.kind === 'sub' ? [70, 160, 210, 70] : [215, 160, 80, 60]),
       opacity,
       updateTriggers: { getWidth: trig, getColor: trig },
@@ -152,7 +155,7 @@ export function cableLayers(scene, { laneW, labels, globe, opacity = 1, showFibe
         id: 'cable-fans',
         data: scene.fans,
         getPath: (f) => f.path,
-        getWidth: Math.max(1, laneW * 0.55),
+        getWidth: Math.max(0.8, laneW * 0.7),
         getColor: (f) => [...f.color, 170],
         opacity,
         pickable: true,
@@ -162,7 +165,7 @@ export function cableLayers(scene, { laneW, labels, globe, opacity = 1, showFibe
         id: 'cable-ends',
         data: scene.ends,
         getPosition: (e) => e.position,
-        getRadius: laneW * 0.9,
+        getRadius: Math.max(1.5, laneW * 1.2),
         radiusUnits: 'pixels',
         getFillColor: (e) => e.color,
         stroked: true,
@@ -189,7 +192,7 @@ export function cableLayers(scene, { laneW, labels, globe, opacity = 1, showFibe
     );
   }
   // a mux stop spans most of its widest trunk; its outer lanes show past it
-  const stopR = (s) => (showFibers && s.mux ? Math.max(4, 0.32 * s.lanes * laneW * LANE_SPACING + 2) : showFibers && s.lanes ? 2.6 : 2.2);
+  const stopR = (s) => (showFibers && s.mux ? Math.max(3, 0.4 * s.lanes * laneW * LANE_SPACING + 1.5) : showFibers && s.lanes ? 2 : 1.8);
   layers.push(
     new ScatterplotLayer({
       id: 'cable-stations',
@@ -201,7 +204,7 @@ export function cableLayers(scene, { laneW, labels, globe, opacity = 1, showFibe
       stroked: true,
       getLineColor: [15, 18, 25, 255],
       lineWidthUnits: 'pixels',
-      getLineWidth: (s) => (showFibers && s.lanes ? 2 : 0.8),
+      getLineWidth: (s) => (showFibers && s.lanes ? 1.5 : 0.8),
       billboard: globe,
       parameters: top,
       pickable: true,

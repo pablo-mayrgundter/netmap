@@ -24,7 +24,7 @@ import { createSidebar } from './apps/sidebar.js';
 import { analytics, track, countBucket } from './analytics.js';
 import { mountConsent } from './consent.js';
 import { buildCableNet, routeFibers, layoutLanes, maxLanesAt } from './cables/net.js';
-import { cableScene, cableLayers, LIFT_M as CABLE_LIFT_M } from './cables/layers.js';
+import { cableScene, cableLayers, LIFT_M as CABLE_LIFT_M, LANE_SPACING } from './cables/layers.js';
 
 // Material Icons (Apache-2.0), the same glyphs as MUI's icons, inlined as SVG.
 import hubIcon from '@material-design-icons/svg/filled/hub.svg?raw';
@@ -825,8 +825,12 @@ function cableLayersFor(globeView, withFibers) {
     scene = cableScene(net, [], [], L, globeView);
     cableShown = { net, fibers: [], routes: [], L, scene };
   }
-  // Lanes thin out at world scale so a trunk of them doesn't fill an ocean.
-  const laneW = (1.1 + 0.35 * Math.min(z, 7)) * (0.6 + 4 * state.fiberWidth);
+  // A full trunk is about ten links wide (links are 1 px), growing a little
+  // as you zoom in; its lanes share that, so more lanes means thinner ones.
+  // The Fiber width slider scales it (1x at its default).
+  const maxLanes = withFibers ? maxLanesAt(z) : 1;
+  const trunkPx = 10 * (1 + 0.25 * Math.max(0, z - 2)) * (0.5 + 5 * state.fiberWidth);
+  const laneW = Math.max(0.5, Math.min(3, trunkPx / (maxLanes * LANE_SPACING)));
   return cableLayers(scene, { laneW, labels: z >= 3, globe: globeView, showFibers: withFibers, facing: globeView ? facingCamera() : null });
 }
 

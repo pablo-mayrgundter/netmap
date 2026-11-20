@@ -83,7 +83,8 @@ side by side in a dark casing, a white stop at each station (as wide as the
 trunk where lines branch or leave), and a fan from the station out to the
 fiber's own ends. A span shows the biggest fibers first, and a fiber is
 drawn only where every span on its route has a lane free, so each line runs
-unbroken end to end; the rest ride in one grey lane. How many lanes a span
+unbroken end to end; the rest ride in one grey lane. A full trunk is about ten links wide (growing a little with zoom; *Fiber
+width* scales it), and its lanes share that width. How many lanes a span
 shows grows with zoom, `4·2^(z/2)`: about 8 at world scale, dozens close up,
 and narrowing the *Bundle* slider makes more, smaller fibers. Lanes are
 ordered across a span by which side their fibers come from and leave to, so
